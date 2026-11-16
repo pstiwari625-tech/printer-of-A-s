@@ -15,3 +15,9 @@ services:
         value: Ankur Tiwari
       - key: PI_TOKEN
         generateValue: true
+      - key: CASHFREE_APP_ID
+        sync: false
+      - key: CASHFREE_SECRET_KEY
+        sync: false
+      - key: CASHFREE_ENV
+        value: sandbox

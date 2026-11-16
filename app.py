@@ -37,6 +37,7 @@ def load_env():
                             os.environ[k.strip()] = v.strip()
 
 load_env()
+import cashfree_helper
 
 RUNTIME_DIR = "/tmp" if os.environ.get("VERCEL") else BASE
 UPLOADS = os.path.join(RUNTIME_DIR, "uploads")
@@ -2040,6 +2041,12 @@ def get_job(job_id):
 @app.get("/job/<job_id>")
 def job(job_id):
     j = get_job(job_id)
+    cf_session = None
+    if cashfree_helper.is_cashfree_configured() and j["status"] == "pending_payment":
+        base_url = request.host_url.rstrip("/")
+        notify_url = f"{base_url}/api/cashfree/webhook"
+        cf_session = cashfree_helper.get_or_create_cashfree_session(job_id, j["amount"], notify_url=notify_url)
+
     return render_page("""
     <div class="card">
       <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px;">
@@ -2053,7 +2060,7 @@ def job(job_id):
       <!-- Print Preview Actions -->
       <div style="display: flex; gap: 10px; margin: 10px 0 24px;">
         <button type="button" class="btn-preview-prominent" style="flex: 1; justify-content: center; padding: 12px 20px;" onclick="openPdfViewer('/job/{{ j['id'] }}/preview', '{{ j['filename'] }}')">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"></path></svg>
           Print Preview
         </button>
         <a href="/job/{{ j['id'] }}/preview" target="_blank" rel="noopener noreferrer" class="btn-secondary" style="justify-content: center; padding: 12px 18px;">
@@ -2098,18 +2105,33 @@ def job(job_id):
         <div class="upi-paise-note">Scan with GPay, PhonePe, Paytm, or any UPI App</div>
 
         <!-- Dynamic QR Code Container -->
-        <div class="upi-qr-box" id="qrcode-container"></div>
+        <div class="upi-qr-box" id="qrcode-container">
+          {% if cf_session and cf_session.get('qr_data') %}
+          <img id="cf-qr-img" src="{{ cf_session['qr_data'] }}" alt="Cashfree UPI QR" style="width: 170px; height: 170px; display: block; border-radius: 8px;">
+          {% endif %}
+        </div>
 
         <!-- Mobile UPI Intent Deep Link -->
-        <a id="btn-upi-intent" href="upi://pay?pa={{ upi_vpa }}&pn={{ upi_name }}&am={{ '%.2f'|format(j['amount']) }}&cu=INR&tn=Job_{{ j['id'] }}" class="btn-upi-intent">
+        <a id="btn-upi-intent" href="{% if cf_session and cf_session.get('links') and cf_session['links'].get('default') %}{{ cf_session['links']['default'] }}{% else %}upi://pay?pa={{ upi_vpa }}&pn={{ upi_name }}&am={{ '%.2f'|format(j['amount']) }}&cu=INR&tn=Job_{{ j['id'] }}{% endif %}" class="btn-upi-intent">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"></path></svg>
           Pay with UPI App (Mobile)
         </a>
 
+        {% if cf_session and cf_session.get('env') == 'sandbox' %}
+        <!-- Cashfree Sandbox Simulator Button -->
+        <div id="cf-simulator-box" style="background: rgba(139, 92, 246, 0.12); border: 1px dashed #A78BFA; border-radius: 8px; padding: 12px; margin-top: 14px; text-align: center;">
+          <div style="font-size: 11px; color: #C4B5FD; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;">🧪 Cashfree Test Mode Active</div>
+          <div style="font-size: 12px; color: var(--text-muted); margin: 4px 0 10px;">Zero money deducted. Click below to simulate UPI payment:</div>
+          <a id="btn-cf-simulator" href="{{ cf_session.get('links', {}).get('web') or cf_session.get('links', {}).get('default') or '#' }}" target="_blank" rel="noopener noreferrer" class="btn-secondary" style="display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 8px 16px; font-size: 13px; color: #FFFFFF; border-color: #8B5CF6; background: rgba(139, 92, 246, 0.2);">
+            Open Cashfree Simulator ↗
+          </a>
+        </div>
+        {% endif %}
+
         <!-- Live Listener Status Pulse -->
         <div class="pulse-container" id="status-container">
           <div class="pulse-dot"></div>
-          <span id="status-label">Listening for bank SMS confirmation...</span>
+          <span id="status-label">{% if cf_session %}Listening for instant Cashfree payment...{% else %}Listening for bank SMS confirmation...{% endif %}</span>
         </div>
 
         <!-- Manual UTR Fallback -->
@@ -2164,8 +2186,10 @@ def job(job_id):
           }
         }
 
-        // Render QR on page load
-        renderQrCode(currentAmount);
+        // Render QR on page load only if Cashfree dynamic QR not already present
+        if (!document.getElementById('cf-qr-img')) {
+          renderQrCode(currentAmount);
+        }
 
         // Real-Time Payment Polling (Every 2 seconds)
         const pollInterval = setInterval(checkPaymentStatus, 2000);
@@ -2259,7 +2283,24 @@ def job(job_id):
               document.getElementById('display-rate').textContent = currencySymbol + data.rate.toFixed(1) + ' / page';
               document.getElementById('display-total').textContent = currencySymbol + currentAmount;
               document.getElementById('hero-amount').textContent = currencySymbol + currentAmount;
-              renderQrCode(currentAmount);
+
+              if (data.cf_qr) {
+                const qrContainer = document.getElementById('qrcode-container');
+                if (qrContainer) {
+                  qrContainer.innerHTML = `<img id="cf-qr-img" src="${data.cf_qr}" alt="Cashfree UPI QR" style="width: 170px; height: 170px; display: block; border-radius: 8px;">`;
+                }
+              } else {
+                renderQrCode(currentAmount);
+              }
+
+              if (data.cf_simulator) {
+                const simBtn = document.getElementById('btn-cf-simulator');
+                if (simBtn) simBtn.href = data.cf_simulator;
+              }
+              if (data.cf_intent) {
+                const intentBtn = document.getElementById('btn-upi-intent');
+                if (intentBtn) intentBtn.href = data.cf_intent;
+              }
             }
           } catch (err) {
             console.error("Update error:", err);
@@ -2287,7 +2328,7 @@ def job(job_id):
       {% endif %}
     </div>
     """, j=j, cur=CURRENCY, p=PRICE_PER_PAGE, rate=PRICE_PER_PAGE.get(j["color"], 2.0),
-       upi_vpa=UPI_VPA, upi_name=UPI_NAME)
+       upi_vpa=UPI_VPA, upi_name=UPI_NAME, cf_session=cf_session)
 
 
 @app.get("/job/<job_id>/preview")
@@ -2322,7 +2363,7 @@ def payment_status(job_id):
     status = row["status"]
     utr = row["utr_number"] if "utr_number" in row.keys() else ""
 
-    # Check Supabase if local is still pending
+    # 1. Check Supabase if local is still pending
     if status == "pending_payment" and SUPABASE_URL:
         supa_jobs = supabase_request(f"jobs?id=eq.{job_id}&select=*")
         if supa_jobs and len(supa_jobs) > 0:
@@ -2334,12 +2375,100 @@ def payment_status(job_id):
                 with con:
                     con.execute("UPDATE jobs SET status=?, utr_number=? WHERE id=?", (status, utr, job_id))
 
+    # 2. Check Cashfree PG Order Status if still pending
+    if status == "pending_payment" and cashfree_helper.is_cashfree_configured():
+        amount_cents = int(round(float(row["amount"]) * 100))
+        order_id = f"job_{job_id}_{amount_cents}"
+        order_info = cashfree_helper.get_order_status(order_id)
+        if order_info and order_info.get("order_status") == "PAID":
+            payments = cashfree_helper.get_order_payments(order_id)
+            if payments:
+                p = payments[0]
+                utr = str(p.get("bank_reference") or p.get("cf_payment_id") or "Cashfree-Auto")
+            else:
+                utr = "Cashfree-Auto"
+            status = "queued"
+            with con:
+                con.execute("UPDATE jobs SET status='queued', utr_number=? WHERE id=?", (utr, job_id))
+            if SUPABASE_URL:
+                supabase_request(f"jobs?id=eq.{job_id}", method="PATCH", data={"status": "queued", "utr_number": utr})
+                supabase_request("incoming_payments", method="POST", data={
+                    "amount": float(row["amount"]),
+                    "utr_number": utr,
+                    "raw_message": f"Cashfree Polling Payment for {job_id}",
+                    "sender_info": "Cashfree PG Poller",
+                    "is_consumed": True,
+                    "matched_job_id": job_id
+                })
+
     return jsonify({
         "id": job_id,
         "status": status,
         "is_paid": status in ("queued", "printing", "done"),
         "utr": utr
     })
+
+
+@app.post("/api/cashfree/webhook")
+def cashfree_webhook():
+    """
+    Cashfree Server-to-Server Webhook receiver.
+    Triggered instantly (<500ms) upon customer payment.
+    """
+    timestamp = request.headers.get("x-webhook-timestamp", "")
+    signature = request.headers.get("x-webhook-signature", "")
+    raw_body = request.get_data(as_text=True)
+
+    # Verify signature if signature header is provided
+    if signature and timestamp:
+        valid = cashfree_helper.verify_webhook_signature(timestamp, raw_body, signature)
+        if not valid:
+            print("[WARN] Invalid Cashfree webhook signature received!")
+            return jsonify(ok=False, message="Invalid signature"), 400
+
+    data = request.get_json(silent=True) or {}
+    event_type = data.get("type", "")
+
+    if event_type == "PAYMENT_SUCCESS_WEBHOOK" or "data" in data:
+        payload = data.get("data", {})
+        order = payload.get("order", {})
+        payment = payload.get("payment", {})
+        order_id = str(order.get("order_id", ""))
+
+        # Accurately extract job_id from order_id (e.g. job_test_cf_123_400 -> test_cf_123)
+        job_id = order_id
+        if order_id.startswith("job_"):
+            remainder = order_id[4:]
+            if "_" in remainder:
+                left, right = remainder.rsplit("_", 1)
+                job_id = left if right.isdigit() else remainder
+            else:
+                job_id = remainder
+
+        utr = str(payment.get("bank_reference") or payment.get("cf_payment_id") or "Cashfree-Auto")
+        amount = float(payment.get("payment_amount", order.get("order_amount", 0.0)))
+
+        con = get_db()
+        row = con.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+        if row and row["status"] == "pending_payment":
+            with con:
+                con.execute("UPDATE jobs SET status='queued', utr_number=? WHERE id=?", (utr, job_id))
+
+            if SUPABASE_URL:
+                supabase_request(f"jobs?id=eq.{job_id}", method="PATCH", data={"status": "queued", "utr_number": utr})
+                supabase_request("incoming_payments", method="POST", data={
+                    "amount": amount,
+                    "utr_number": utr,
+                    "raw_message": f"Cashfree Webhook {payment.get('cf_payment_id', '')} for {job_id}",
+                    "sender_info": "Cashfree Webhook",
+                    "is_consumed": True,
+                    "matched_job_id": job_id
+                })
+
+        print(f"[CASHFREE WEBHOOK] Job {job_id} successfully queued! UTR: {utr}")
+        return jsonify(ok=True, message="Payment acknowledged"), 200
+
+    return jsonify(ok=True, message="Webhook received"), 200
 
 
 @app.post("/api/job/<job_id>/verify-utr")
@@ -2396,7 +2525,21 @@ def update_options(job_id):
         })
 
     rate = PRICE_PER_PAGE.get(color, 2.0)
-    return jsonify(ok=True, amount=new_amount, rate=rate)
+
+    # If Cashfree is configured, also fetch new Cashfree session data for the updated amount
+    cf_data = {}
+    if cashfree_helper.is_cashfree_configured():
+        base_url = request.host_url.rstrip("/")
+        notify_url = f"{base_url}/api/cashfree/webhook"
+        sess = cashfree_helper.get_or_create_cashfree_session(job_id, new_amount, notify_url=notify_url)
+        if sess:
+            cf_data = {
+                "cf_qr": sess.get("qr_data"),
+                "cf_simulator": sess.get("links", {}).get("web") or sess.get("links", {}).get("default"),
+                "cf_intent": sess.get("links", {}).get("default")
+            }
+
+    return jsonify(ok=True, amount=new_amount, rate=rate, **cf_data)
 
 
 @app.get("/queue")
