@@ -101,6 +101,76 @@ def supabase_sync_job(job_dict):
     return supabase_request("jobs", method="POST", data=payload)
 
 
+# ---------- Supabase Storage Bucket Helpers ----------
+SUPABASE_STORAGE_BUCKET = "print-jobs"
+
+def supabase_upload_pdf(job_id, file_path):
+    """Uploads the merged PDF to Supabase Storage bucket 'print-jobs'."""
+    if not SUPABASE_URL or not SUPABASE_KEY or not os.path.exists(file_path):
+        return False
+    url = f"{SUPABASE_URL}/storage/v1/object/{SUPABASE_STORAGE_BUCKET}/{job_id}.pdf"
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/pdf",
+        "x-upsert": "true"
+    }
+    try:
+        with open(file_path, "rb") as f:
+            pdf_bytes = f.read()
+        req = urllib.request.Request(url, data=pdf_bytes, headers=headers, method="POST")
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            print(f"[SUPABASE STORAGE] Successfully uploaded {job_id}.pdf ({len(pdf_bytes)} bytes)")
+            return True
+    except Exception as e:
+        print(f"[SUPABASE STORAGE UPLOAD ERROR] {job_id}: {e}")
+        return False
+
+
+def supabase_download_pdf(job_id, dest_path):
+    """Restores PDF from Supabase Storage if local container restarted."""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return False
+    url = f"{SUPABASE_URL}/storage/v1/object/{SUPABASE_STORAGE_BUCKET}/{job_id}.pdf"
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}"
+    }
+    try:
+        req = urllib.request.Request(url, headers=headers, method="GET")
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = resp.read()
+            os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+            with open(dest_path, "wb") as f:
+                f.write(data)
+            print(f"[SUPABASE STORAGE] Restored {job_id}.pdf from cloud ({len(data)} bytes)")
+            return True
+    except Exception as e:
+        print(f"[SUPABASE STORAGE DOWNLOAD ERROR] {job_id}: {e}")
+        return False
+
+
+def supabase_delete_pdf(job_id):
+    """Permanently purges PDF from Supabase Storage bucket once printing is done."""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return False
+    url = f"{SUPABASE_URL}/storage/v1/object/{SUPABASE_STORAGE_BUCKET}"
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json"
+    }
+    payload = json.dumps({"prefixes": [f"{job_id}.pdf"]}).encode("utf-8")
+    try:
+        req = urllib.request.Request(url, data=payload, headers=headers, method="DELETE")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            print(f"[SUPABASE STORAGE] Permanently purged {job_id}.pdf for user privacy")
+            return True
+    except Exception as e:
+        print(f"[SUPABASE STORAGE PURGE ERROR] {job_id}: {e}")
+        return False
+
+
 # ---------- database management ----------
 def get_db():
     if "db" not in g:
@@ -1337,6 +1407,10 @@ PAGE_TEMPLATE = """<!doctype html>
       100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
     }
 
+    @keyframes spin {
+      100% { transform: rotate(360deg); }
+    }
+
     .utr-fallback-box {
       margin-top: 20px;
       padding-top: 16px;
@@ -1676,6 +1750,29 @@ def index():
           </button>
         </form>
 
+        <!-- Visual Upload & Optimization Progress Modal -->
+        <div id="upload-modal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.85); backdrop-filter: blur(10px); z-index: 99999; align-items: center; justify-content: center; padding: 20px;">
+          <div style="background: #111418; border: 1px solid rgba(255,255,255,0.14); border-radius: 16px; padding: 36px 30px; max-width: 440px; width: 100%; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.8); text-align: center;">
+            <div style="width: 56px; height: 56px; border-radius: 50%; background: rgba(141, 235, 181, 0.12); color: #8DEBB5; display: inline-flex; align-items: center; justify-content: center; margin-bottom: 20px;">
+              <svg id="upload-icon-spin" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="animation: spin 1.4s linear infinite;">
+                <path d="M21 12a9 9 0 1 1-6.219-8.56"></path>
+              </svg>
+            </div>
+            <h3 id="upload-stage-title" style="color: #FFFFFF; font-size: 1.3rem; font-weight: 700; margin: 0 0 6px;">Preparing Documents...</h3>
+            <p id="upload-stage-sub" style="color: var(--text-muted); font-size: 13.5px; margin: 0 0 24px;">Preserving 300 DPI high-definition print clarity</p>
+            
+            <!-- Progress Bar Track -->
+            <div style="width: 100%; height: 10px; background: rgba(255,255,255,0.08); border-radius: 999px; overflow: hidden; margin-bottom: 14px; position: relative;">
+              <div id="upload-progress-fill" style="width: 0%; height: 100%; background: linear-gradient(90deg, #8DEBB5, #38BDF8); border-radius: 999px; transition: width 0.2s ease;"></div>
+            </div>
+
+            <div style="display: flex; justify-content: space-between; align-items: center; font-size: 12.5px; color: var(--text-muted);">
+              <span id="upload-status-detail">Optimizing...</span>
+              <span id="upload-percentage" style="color: #8DEBB5; font-weight: 700; font-size: 14px;">0%</span>
+            </div>
+          </div>
+        </div>
+
         <!-- Privacy Notice -->
         <div style="display: flex; align-items: center; gap: 8px; margin-top: 18px; padding: 12px 16px; background: rgba(141, 235, 181, 0.05); border: 1px solid rgba(141, 235, 181, 0.15); border-radius: 8px;">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8DEBB5" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;">
@@ -1863,39 +1960,176 @@ def index():
         }
       }
 
-      function handleFormSubmit(event) {
+      async function optimizeFileForPrint(file) {
+        // 1. PDFs are NEVER compressed or altered - vector fidelity is 100% preserved
+        const nameLower = file.name.toLowerCase();
+        if (file.type === 'application/pdf' || nameLower.endsWith('.pdf')) {
+          return file;
+        }
+
+        // 2. Only process standard raster images (JPG, PNG, WEBP, BMP)
+        const isRaster = /^image\/(jpe?g|png|webp|bmp)$/i.test(file.type) ||
+                         /\.(jpe?g|png|webp|bmp)$/i.test(nameLower);
+        if (!isRaster) {
+          return file; // Pass unusual formats unmodified to server
+        }
+
+        // 3. Skip small files (< 1.2 MB)
+        if (file.size <= 1.2 * 1024 * 1024) {
+          return file;
+        }
+
+        return new Promise((resolve) => {
+          const img = new Image();
+          const url = URL.createObjectURL(file);
+          img.onload = () => {
+            URL.revokeObjectURL(url);
+            const MAX_DIM = 2500; // 300 DPI for crisp A4 print
+            let w = img.width;
+            let h = img.height;
+
+            if (w <= MAX_DIM && h <= MAX_DIM) {
+              resolve(file);
+              return;
+            }
+
+            if (w > h) {
+              if (w > MAX_DIM) {
+                h = Math.round((h * MAX_DIM) / w);
+                w = MAX_DIM;
+              }
+            } else {
+              if (h > MAX_DIM) {
+                w = Math.round((w * MAX_DIM) / h);
+                h = MAX_DIM;
+              }
+            }
+
+            const canvas = document.createElement('canvas');
+            canvas.width = w;
+            canvas.height = h;
+            const ctx = canvas.getContext('2d');
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = 'high';
+            ctx.fillStyle = '#FFFFFF';
+            ctx.fillRect(0, 0, w, h);
+            ctx.drawImage(img, 0, 0, w, h);
+
+            canvas.toBlob((blob) => {
+              if (blob && blob.size < file.size) {
+                const newName = file.name.replace(/\.[^/.]+$/, "") + ".jpg";
+                const optFile = new File([blob], newName, { type: 'image/jpeg', lastModified: Date.now() });
+                resolve(optFile);
+              } else {
+                resolve(file);
+              }
+            }, 'image/jpeg', 0.90);
+          };
+          img.onerror = () => {
+            URL.revokeObjectURL(url);
+            resolve(file);
+          };
+          img.src = url;
+        });
+      }
+
+      async function handleFormSubmit(event) {
         event.preventDefault();
         if (selectedFiles.length === 0) {
           alert('Please choose at least one PDF or image file before continuing.');
           return false;
         }
-        // Build FormData manually from selectedFiles array —
-        // avoids the iOS Safari DataTransfer.items bug where
-        // programmatic fileInput.files assignment is not supported.
-        const submitBtn = document.getElementById('btn-submit');
-        const submitText = document.getElementById('btn-submit-text');
-        submitBtn.disabled = true;
-        submitText.textContent = 'Uploading…';
+
+        const modal = document.getElementById('upload-modal');
+        const stageTitle = document.getElementById('upload-stage-title');
+        const stageSub = document.getElementById('upload-stage-sub');
+        const progressFill = document.getElementById('upload-progress-fill');
+        const statusDetail = document.getElementById('upload-status-detail');
+        const percentageText = document.getElementById('upload-percentage');
+
+        modal.style.display = 'flex';
+        progressFill.style.width = '0%';
+        percentageText.textContent = '0%';
+
+        // Stage 1: Smart Client Optimization (preserving 300 DPI print quality)
+        stageTitle.textContent = 'Optimizing Documents...';
+        stageSub.textContent = 'Preserving 300 DPI high-definition print clarity';
+        statusDetail.textContent = 'Checking files...';
+
+        const optimizedFiles = [];
+        for (let i = 0; i < selectedFiles.length; i++) {
+          const orig = selectedFiles[i];
+          statusDetail.textContent = `Optimizing (${i + 1}/${selectedFiles.length}): ${orig.name}`;
+          const optPct = Math.round(((i + 1) / selectedFiles.length) * 20);
+          progressFill.style.width = `${optPct}%`;
+          percentageText.textContent = `${optPct}%`;
+          const opt = await optimizeFileForPrint(orig);
+          optimizedFiles.push(opt);
+        }
+
+        // Stage 2: Upload to Cloud Server
+        stageTitle.textContent = 'Uploading to Cloud...';
+        stageSub.textContent = 'Transferring documents securely';
+        progressFill.style.width = '20%';
+        percentageText.textContent = '20%';
 
         const fd = new FormData();
-        selectedFiles.forEach(f => fd.append('files', f, f.name));
+        optimizedFiles.forEach(f => fd.append('files', f, f.name));
 
-        fetch('/upload', { method: 'POST', body: fd })
-          .then(res => {
-            if (res.redirected) {
-              window.location.href = res.url;
-            } else if (res.ok) {
-              return res.text().then(() => { window.location.href = res.url || '/'; });
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', '/upload', true);
+        xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
+
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable) {
+            const uploadPct = Math.round((e.loaded / e.total) * 70);
+            const totalPct = 20 + uploadPct;
+            progressFill.style.width = `${totalPct}%`;
+            percentageText.textContent = `${totalPct}%`;
+            const loadedMb = (e.loaded / (1024 * 1024)).toFixed(1);
+            const totalMb = (e.total / (1024 * 1024)).toFixed(1);
+            statusDetail.textContent = `Uploading: ${loadedMb} MB / ${totalMb} MB`;
+          }
+        };
+
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 400) {
+            stageTitle.textContent = 'Merging & Finalizing...';
+            stageSub.textContent = 'Saving PDF to Supabase Cloud Storage';
+            progressFill.style.width = '100%';
+            percentageText.textContent = '100%';
+            statusDetail.textContent = 'Done! Redirecting...';
+
+            try {
+              const resData = JSON.parse(xhr.responseText);
+              if (resData.redirect_url) {
+                setTimeout(() => { window.location.href = resData.redirect_url; }, 350);
+                return;
+              }
+            } catch (e) {}
+
+            if (xhr.responseURL) {
+              window.location.href = xhr.responseURL;
             } else {
-              return res.text().then(text => { throw new Error(text || 'Upload failed'); });
+              window.location.href = '/queue';
             }
-          })
-          .catch(err => {
-            console.error(err);
-            submitBtn.disabled = false;
-            submitText.textContent = 'Continue with ' + (selectedFiles.length === 1 ? '1 document' : selectedFiles.length + ' documents');
-            alert('Upload failed. Please check your files and try again.');
-          });
+          } else {
+            let errMsg = 'Upload failed. Please check your files and try again.';
+            try {
+              const resData = JSON.parse(xhr.responseText);
+              if (resData.error) errMsg = resData.error;
+            } catch (e) {}
+            modal.style.display = 'none';
+            alert(errMsg);
+          }
+        };
+
+        xhr.onerror = () => {
+          modal.style.display = 'none';
+          alert('Network connection error. Please try uploading again.');
+        };
+
+        xhr.send(fd);
         return false;
       }
 
@@ -1936,12 +2170,17 @@ def index():
 
 @app.post("/upload")
 def upload():
+    def upload_err(msg):
+        if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+            return jsonify(ok=False, error=msg), 400
+        return redirect(url_for("index", error=msg))
+
     files = request.files.getlist("files")
     if not files or not any(f.filename for f in files):
         files = request.files.getlist("file")
     valid_files = [f for f in files if f and f.filename and is_supported_upload(f)]
     if not valid_files:
-        return redirect(url_for("index", error="Please choose at least one valid PDF or image file."))
+        return upload_err("Please choose at least one valid PDF or image file.")
 
     job_id = uuid.uuid4().hex[:10]
     stored = f"{job_id}.pdf"
@@ -1976,23 +2215,23 @@ def upload():
     except (OSError, UnidentifiedImageError, ValueError, TypeError):
         if os.path.exists(path):
             os.remove(path)
-        return redirect(url_for("index", error="Could not read an uploaded file. Please ensure every PDF or image is valid."))
+        return upload_err("Could not read an uploaded file. Please ensure every PDF or image is valid.")
     except Exception:
         if os.path.exists(path):
             os.remove(path)
-        return redirect(url_for("index", error="Could not read or merge the uploaded files. Please ensure every PDF or image is valid."))
+        return upload_err("Could not read or merge the uploaded files. Please ensure every PDF or image is valid.")
 
     try:
         pages = len(PdfReader(path).pages)
     except Exception:
         if os.path.exists(path):
             os.remove(path)
-        return redirect(url_for("index", error="That file could not be read as a PDF."))
+        return upload_err("That file could not be read as a PDF.")
 
     if pages < 1 or pages > MAX_PAGES:
         if os.path.exists(path):
             os.remove(path)
-        return redirect(url_for("index", error=f"Combined document must have 1 to {MAX_PAGES} pages (uploaded total is {pages} pages)."))
+        return upload_err(f"Combined document must have 1 to {MAX_PAGES} pages (uploaded total is {pages} pages).")
 
     color = request.form.get("color", "bw")
     if color not in PRICE_PER_PAGE:
@@ -2026,6 +2265,12 @@ def upload():
         "amount": calculated_amount, "reserved_paise_offset": offset,
         "status": "pending_payment", "created": created_iso, "notes": notes
     })
+
+    # Upload merged PDF to Supabase Cloud Storage for persistent cloud backup
+    supabase_upload_pdf(job_id, path)
+
+    if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+        return jsonify(ok=True, redirect_url=url_for("job", job_id=job_id))
 
     return redirect(url_for("job", job_id=job_id))
 
@@ -2351,7 +2596,12 @@ def job(job_id):
 @app.get("/job/<job_id>/preview")
 def job_preview(job_id):
     j = get_job(job_id)
-    return send_file(os.path.join(UPLOADS, j["stored"]), mimetype="application/pdf")
+    file_path = os.path.join(UPLOADS, j["stored"])
+    if not os.path.exists(file_path):
+        supabase_download_pdf(job_id, file_path)
+    if not os.path.exists(file_path):
+        abort(404)
+    return send_file(file_path, mimetype="application/pdf")
 
 
 @app.post("/job/<job_id>/pay")
@@ -2664,7 +2914,13 @@ def next_job():
 @app.get("/api/job/<job_id>/file")
 def job_file(job_id):
     require_pi()
-    return send_file(os.path.join(UPLOADS, get_job(job_id)["stored"]), mimetype="application/pdf")
+    j = get_job(job_id)
+    file_path = os.path.join(UPLOADS, j["stored"])
+    if not os.path.exists(file_path):
+        supabase_download_pdf(job_id, file_path)
+    if not os.path.exists(file_path):
+        abort(404)
+    return send_file(file_path, mimetype="application/pdf")
 
 
 @app.post("/api/job/<job_id>/status")
@@ -2673,10 +2929,24 @@ def job_status(job_id):
     status = (request.get_json(silent=True) or {}).get("status")
     if status not in ("done", "failed"):
         abort(400)
-    get_job(job_id)
+    j = get_job(job_id)
     con = get_db()
     with con:
         con.execute("UPDATE jobs SET status=? WHERE id=?", (status, job_id))
+    if SUPABASE_URL:
+        supabase_request(f"jobs?id=eq.{job_id}", method="PATCH", data={"status": status})
+
+    # Privacy Auto-Purge: once printing is finished, permanently remove local file & Supabase cloud backup
+    if status == "done":
+        file_path = os.path.join(UPLOADS, j["stored"])
+        if os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+                print(f"[PRIVACY PURGE] Removed local copy for job {job_id}")
+            except Exception as e:
+                print(f"[PRIVACY PURGE ERROR] Local file delete {job_id}: {e}")
+        supabase_delete_pdf(job_id)
+
     return jsonify(ok=True)
 
 
