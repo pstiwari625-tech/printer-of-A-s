@@ -10,7 +10,7 @@ services:
       - key: SUPABASE_SERVICE_ROLE_KEY
         sync: false
       - key: UPI_VPA
-        value: paytm.s4qv311@pty
+        value: paytm.s4qv31l@pty
       - key: UPI_NAME
         value: Ankur Tiwari
       - key: PI_TOKEN

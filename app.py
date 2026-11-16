@@ -52,7 +52,7 @@ IMAGE_EXTENSIONS = {".bmp", ".gif", ".heic", ".heif", ".jpeg", ".jpg", ".png", "
 # Supabase & UPI Settings
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "") or os.environ.get("SUPABASE_KEY", "")
-UPI_VPA = os.environ.get("UPI_VPA", "paytm.s4qv311@pty")
+UPI_VPA = os.environ.get("UPI_VPA", "paytm.s4qv31l@pty")
 UPI_NAME = os.environ.get("UPI_NAME", "Ankur Tiwari")
 
 app = Flask(__name__)
