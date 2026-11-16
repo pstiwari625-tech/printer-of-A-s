@@ -2100,9 +2100,9 @@ def job(job_id):
 
       <!-- Autonomous UPI Payment Card -->
       <div class="upi-payment-card" id="upi-card">
-        <div class="upi-badge">⚡ Autonomous UPI Payment</div>
+        <div class="upi-badge">{% if cf_session %}⚡ Cashfree PG Active ({{ cf_session.get('env', 'live').upper() }}){% else %}⚡ Direct UPI Mode (Paytm){% endif %}</div>
         <div class="upi-amount-hero" id="hero-amount">{{ cur }}{{ '%.2f'|format(j['amount']) }}</div>
-        <div class="upi-paise-note">Scan with GPay, PhonePe, Paytm, or any UPI App</div>
+        <div class="upi-paise-note">{% if cf_session %}Scan with GPay, PhonePe, Paytm, or any UPI App{% else %}Direct UPI Fallback: {{ upi_vpa }}{% endif %}</div>
 
         <!-- Dynamic QR Code Container -->
         <div class="upi-qr-box" id="qrcode-container">
