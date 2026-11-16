@@ -200,6 +200,9 @@ def verify_webhook_signature(timestamp: str, raw_body: str, signature: str) -> b
         return False
 
 
+_SESSION_CACHE: Dict[str, Dict[str, Any]] = {}
+
+
 def get_or_create_cashfree_session(job_id: str, amount: float, notify_url: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """
     Creates or retrieves an existing Cashfree session for a job and returns QR code and links.
@@ -211,12 +214,20 @@ def get_or_create_cashfree_session(job_id: str, amount: float, notify_url: Optio
         amount_cents = int(round(clean_amount * 100))
         order_id = f"job_{job_id}_{amount_cents}"
 
+        # 1. Return from fast in-memory cache if available
+        cache_key = f"{job_id}_{amount_cents}"
+        if cache_key in _SESSION_CACHE:
+            cached = _SESSION_CACHE[cache_key]
+            if cached.get("qr_data"):
+                return cached
+
         session_id = None
         try:
             order_res = create_order(order_id, clean_amount, notify_url=notify_url)
             session_id = order_res.get("payment_session_id")
         except RuntimeError as e:
-            if "already exists" in str(e).lower():
+            err_str = str(e).lower()
+            if "already present" in err_str or "already exists" in err_str or "409" in err_str:
                 existing = get_order_status(order_id)
                 session_id = existing.get("payment_session_id") if existing else None
             else:
@@ -244,13 +255,15 @@ def get_or_create_cashfree_session(job_id: str, amount: float, notify_url: Optio
             print(f"[WARN] Could not fetch Cashfree links: {e}")
 
         cfg = get_config()
-        return {
+        session_info = {
             "order_id": order_id,
             "session_id": session_id,
             "qr_data": qr_data,
             "links": links,
             "env": cfg["env"]
         }
+        _SESSION_CACHE[cache_key] = session_info
+        return session_info
     except Exception as e:
         print(f"[WARN] Cashfree session creation error: {e}")
         return None
