@@ -52,8 +52,8 @@ IMAGE_EXTENSIONS = {".bmp", ".gif", ".heic", ".heif", ".jpeg", ".jpg", ".png", "
 # Supabase & UPI Settings
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "") or os.environ.get("SUPABASE_KEY", "")
-UPI_VPA = os.environ.get("UPI_VPA", "yourvpa@bank")
-UPI_NAME = os.environ.get("UPI_NAME", "Printer of As")
+UPI_VPA = os.environ.get("UPI_VPA", "9696123736@kotakbank")
+UPI_NAME = os.environ.get("UPI_NAME", "SHALINI")
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50 MB

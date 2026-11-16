@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: printer-of-as
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: UPI_VPA
+        value: 9696123736@kotakbank
+      - key: UPI_NAME
+        value: SHALINI
+      - key: PI_TOKEN
+        generateValue: true
