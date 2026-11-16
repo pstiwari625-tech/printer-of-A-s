@@ -10,8 +10,8 @@ services:
       - key: SUPABASE_SERVICE_ROLE_KEY
         sync: false
       - key: UPI_VPA
-        value: 9696123736@kotakbank
+        value: paytm.s4qv311@pty
       - key: UPI_NAME
-        value: SHALINI
+        value: Ankur Tiwari
       - key: PI_TOKEN
         generateValue: true
