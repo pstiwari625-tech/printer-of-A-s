@@ -12,10 +12,33 @@ from typing import Optional, Dict, Any
 from datetime import datetime, timezone
 from sms_parser import IndianPaymentSMSParser
 
+def load_env():
+    # Check current dir, script dir, parent dir for .env
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        os.path.join(script_dir, ".env"),
+        os.path.join(script_dir, "..", ".env"),
+        ".env",
+        "../.env"
+    ]
+    for env_path in candidates:
+        if os.path.exists(env_path):
+            with open(env_path, "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        k, v = line.split("=", 1)
+                        if k.strip() not in os.environ:
+                            os.environ[k.strip()] = v.strip()
+
+load_env()
+
+DEFAULT_SUPABASE_URL = "https://vyctcbosdofiysqjiuje.supabase.co"
+
 class SupabasePaymentBridge:
     def __init__(self, supabase_url: Optional[str] = None, service_key: Optional[str] = None):
-        self.supabase_url = (supabase_url or os.getenv("SUPABASE_URL", "")).rstrip("/")
-        self.service_key = service_key or os.getenv("SUPABASE_SERVICE_ROLE_KEY", "") or os.getenv("SUPABASE_KEY", "")
+        self.supabase_url = (supabase_url or os.getenv("SUPABASE_URL") or DEFAULT_SUPABASE_URL).rstrip("/")
+        self.service_key = service_key or os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY") or ""
         self.parser = IndianPaymentSMSParser()
 
     def _headers(self) -> Dict[str, str]:
