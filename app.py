@@ -208,8 +208,8 @@ init_db()
 
 
 def calculate_paise_offset(job_id):
-    """Generates a stable 11-99 paise offset per job to prevent payment collisions."""
-    return (abs(hash(job_id)) % 89) + 11
+    """Generates a stable 1 to 10 paise (₹0.01 to ₹0.10) offset per job (max 0.10 INR)."""
+    return (abs(hash(job_id)) % 10) + 1
 
 
 def price(pages, copies, color, offset=0):
@@ -872,10 +872,108 @@ PAGE_TEMPLATE = """<!doctype html>
     }
 
     .queue-page .queue-table th:nth-child(1) { width: 14%; }
-    .queue-page .queue-table th:nth-child(2) { width: 54%; }
-    .queue-page .queue-table th:nth-child(3) { width: 10%; }
+    .queue-page .queue-table th:nth-child(2) { width: 13%; }
+    .queue-page .queue-table th:nth-child(3) { width: 43%; }
     .queue-page .queue-table th:nth-child(4) { width: 10%; }
-    .queue-page .queue-table th:nth-child(5) { width: 12%; }
+    .queue-page .queue-table th:nth-child(5) { width: 10%; }
+    .queue-page .queue-table th:nth-child(6) { width: 10%; }
+
+    .badge-token {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-weight: 700;
+      font-size: 13px;
+      padding: 4px 10px;
+      border-radius: 6px;
+      white-space: nowrap;
+    }
+    .badge-token.queued {
+      background: rgba(141, 235, 181, 0.12);
+      color: #8DEBB5;
+      border: 1px solid rgba(141, 235, 181, 0.25);
+    }
+    .badge-token.printing {
+      background: rgba(96, 165, 250, 0.15);
+      color: #60A5FA;
+      border: 1px solid rgba(96, 165, 250, 0.3);
+      animation: pulseAnimation 2s infinite;
+    }
+    .badge-token.done {
+      background: rgba(255, 255, 255, 0.05);
+      color: var(--text-muted);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .badge-token.failed {
+      background: rgba(239, 68, 68, 0.1);
+      color: #EF4444;
+      border: 1px solid rgba(239, 68, 68, 0.2);
+    }
+
+    .user-queue-banner {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      padding: 20px 24px;
+      border-radius: 12px;
+      margin-bottom: 24px;
+      background: #14171B;
+      border: 1px solid rgba(141, 235, 181, 0.3);
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
+    }
+    .user-queue-banner.printing {
+      border-color: rgba(96, 165, 250, 0.4);
+      background: linear-gradient(135deg, rgba(96, 165, 250, 0.08) 0%, #14171B 60%);
+    }
+    .user-queue-banner.done {
+      border-color: rgba(16, 185, 129, 0.4);
+      background: linear-gradient(135deg, rgba(16, 185, 129, 0.08) 0%, #14171B 60%);
+    }
+    .uq-number {
+      font-size: 2.5rem;
+      font-weight: 900;
+      line-height: 1;
+      color: #8DEBB5;
+      padding: 8px 16px;
+      border-radius: 10px;
+      background: rgba(141, 235, 181, 0.1);
+      border: 1px solid rgba(141, 235, 181, 0.2);
+      min-width: 76px;
+      text-align: center;
+    }
+    .user-queue-banner.printing .uq-number {
+      color: #60A5FA;
+      background: rgba(96, 165, 250, 0.12);
+      border-color: rgba(96, 165, 250, 0.25);
+    }
+    .uq-content {
+      flex: 1;
+    }
+    .uq-badge-tag {
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #8DEBB5;
+      margin-bottom: 4px;
+    }
+    .user-queue-banner.printing .uq-badge-tag {
+      color: #60A5FA;
+    }
+    .uq-title {
+      font-size: 1.15rem;
+      font-weight: 700;
+      color: #FFFFFF;
+      margin-bottom: 4px;
+    }
+    .uq-desc {
+      font-size: 13.5px;
+      color: #9CA3AF;
+    }
+    .user-highlight-row {
+      background: rgba(141, 235, 181, 0.07) !important;
+      border-left: 3px solid #8DEBB5;
+    }
 
     .queue-page .queue-table tbody tr {
       transition: background 0.2s ease;
@@ -2829,20 +2927,108 @@ def update_options(job_id):
 @app.get("/queue")
 def queue():
     con = get_db()
-    rows = con.execute("""SELECT * FROM jobs WHERE status!='pending_payment'
-                          ORDER BY created DESC LIMIT 50""").fetchall()
+    if SUPABASE_URL:
+        try:
+            supa_jobs = supabase_request("jobs?status=neq.pending_payment&select=*&order=created.asc&limit=100")
+            if supa_jobs:
+                with con:
+                    for sj in supa_jobs:
+                        con.execute("""INSERT OR REPLACE INTO jobs 
+                            (id, filename, stored, pages, copies, color, duplex, amount, status, created, notes, utr_number, reserved_paise_offset)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                            (sj["id"], sj.get("filename", "document.pdf"), sj.get("stored", f"{sj['id']}.pdf"),
+                             int(sj.get("pages", 1)), int(sj.get("copies", 1)), sj.get("color", "bw"),
+                             1 if sj.get("duplex") else 0, float(sj.get("amount", 2.0)), sj.get("status", "queued"),
+                             sj.get("created", ""), sj.get("notes", ""), sj.get("utr_number", ""), int(sj.get("reserved_paise_offset", 0)))
+                        )
+        except Exception as e:
+            print(f"[QUEUE SUPABASE SYNC ERROR] {e}")
+
+    active_rows = con.execute("""SELECT * FROM jobs WHERE status IN ('printing', 'queued')
+                                 ORDER BY CASE WHEN status='printing' THEN 0 ELSE 1 END, created ASC""").fetchall()
+
+    finished_rows = con.execute("""SELECT * FROM jobs WHERE status IN ('done', 'failed')
+                                   ORDER BY created DESC LIMIT 20""").fetchall()
+
+    queue_map = {r["id"]: idx for idx, r in enumerate(active_rows, start=1)}
+
+    just = request.args.get("just")
+    your_job = None
+    your_pos = None
+    if just:
+        for r in active_rows:
+            if r["id"] == just:
+                your_job = r
+                your_pos = queue_map[r["id"]]
+                break
+        if not your_job:
+            for r in finished_rows:
+                if r["id"] == just:
+                    your_job = r
+                    break
+
+    all_rows = list(active_rows) + list(finished_rows)
+
     return render_page("""
     <section class="queue-page">
     <div class="card queue-card">
       <div class="queue-header">
         <div>
-          <h1 class="page-title" style="font-size: 1.9rem;">Print Queue</h1>
-          <p class="page-sub" style="margin-bottom: 0;">Jobs are processed oldest first.</p>
+          <h1 class="page-title" style="font-size: 1.9rem; display: flex; align-items: center; gap: 12px;">
+            Print Queue <span class="pulse-dot" title="Live Auto-Updating"></span>
+          </h1>
+          <p class="page-sub" style="margin-bottom: 0;">
+            {% if active_rows|length == 0 %}
+              No active documents in line. Ready to print!
+            {% elif active_rows|length == 1 %}
+              1 active document in queue — processed in order.
+            {% else %}
+              {{ active_rows|length }} active documents in queue — numbers descend as printing finishes.
+            {% endif %}
+          </p>
         </div>
         <a href="/" class="btn-secondary">+ Upload Files</a>
       </div>
 
-      {% if not rows %}
+      {% if your_job %}
+        {% if your_pos %}
+          <div class="user-queue-banner {% if your_job['status'] == 'printing' %}printing{% else %}queued{% endif %}">
+            <div class="uq-number">#{{ your_pos }}</div>
+            <div class="uq-content">
+              <div class="uq-badge-tag">
+                {% if your_job['status'] == 'printing' %}
+                  NOW PRINTING 🖨️
+                {% elif your_pos == 1 %}
+                  NEXT IN LINE ⚡
+                {% else %}
+                  YOUR QUEUE NUMBER
+                {% endif %}
+              </div>
+              <div class="uq-title">{{ your_job['filename'] }}</div>
+              <div class="uq-desc">
+                {% if your_job['status'] == 'printing' %}
+                  Your document is printing right now! Please collect your printed sheets from the tray.
+                {% elif your_pos == 1 %}
+                  You are <strong>#1 in line</strong>! Your document is next to print as soon as the printer is ready.
+                {% else %}
+                  You are <strong>#{{ your_pos }} in line</strong> ({{ your_pos - 1 }} document{% if your_pos > 2 %}s{% endif %} ahead of yours). Your queue number will descend automatically.
+                {% endif %}
+              </div>
+            </div>
+          </div>
+        {% elif your_job['status'] == 'done' %}
+          <div class="user-queue-banner done">
+            <div class="uq-number" style="color: #10B981; background: rgba(16,185,129,0.12); border-color: rgba(16,185,129,0.3);">✓</div>
+            <div class="uq-content">
+              <div class="uq-badge-tag" style="color: #10B981;">PRINTING COMPLETE 🎉</div>
+              <div class="uq-title">{{ your_job['filename'] }}</div>
+              <div class="uq-desc">Your document has finished printing! Files have been permanently purged from server storage for your privacy.</div>
+            </div>
+          </div>
+        {% endif %}
+      {% endif %}
+
+      {% if not all_rows %}
       <p style="color: var(--text-muted); margin: 30px 0;">
         The queue is currently empty. <a href="/" style="color: var(--accent); font-weight: 600;">Upload a document</a> to print.
       </p>
@@ -2851,6 +3037,7 @@ def queue():
       <table class="data-table queue-table">
         <thead>
           <tr>
+            <th>Queue #</th>
             <th>Job ID</th>
             <th>Document</th>
             <th>Sheets</th>
@@ -2859,8 +3046,23 @@ def queue():
           </tr>
         </thead>
         <tbody>
-          {% for r in rows %}
-          <tr>
+          {% for r in all_rows %}
+          <tr {% if r['id'] == just %}class="user-highlight-row"{% endif %}>
+            <td>
+              {% if r['id'] in queue_map %}
+                {% if r['status'] == 'printing' %}
+                  <span class="badge-token printing">#{{ queue_map[r['id']] }} (Printing)</span>
+                {% else %}
+                  <span class="badge-token queued">#{{ queue_map[r['id']] }}</span>
+                {% endif %}
+              {% elif r['status'] == 'done' %}
+                <span class="badge-token done">✓ Done</span>
+              {% elif r['status'] == 'failed' %}
+                <span class="badge-token failed">✗ Failed</span>
+              {% else %}
+                <span class="badge-token queued">-</span>
+              {% endif %}
+            </td>
             <td>
               <code class="queue-job-id">{{ r['id'] }}</code>{% if r['id']==just %} <span style="color: var(--accent); font-weight: 700;">(yours)</span>{% endif %}
             </td>
@@ -2881,7 +3083,24 @@ def queue():
       {% endif %}
     </div>
     </section>
-    """, rows=rows, just=request.args.get("just"))
+
+    <script>
+      // Live Auto-Refresh: Polls every 3.5 seconds to descend queue numbers live as printing happens
+      setInterval(async () => {
+        try {
+          const res = await fetch(window.location.href);
+          if (!res.ok) return;
+          const html = await res.text();
+          const doc = new DOMParser().parseFromString(html, 'text/html');
+          const newCard = doc.querySelector('.queue-card');
+          const currentCard = document.querySelector('.queue-card');
+          if (newCard && currentCard) {
+            currentCard.innerHTML = newCard.innerHTML;
+          }
+        } catch (e) {}
+      }, 3500);
+    </script>
+    """, all_rows=all_rows, active_rows=active_rows, queue_map=queue_map, just=just, your_job=your_job, your_pos=your_pos)
 
 
 # ---------- API for Raspberry Pi Worker Daemon ----------
