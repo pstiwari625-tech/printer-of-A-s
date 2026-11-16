@@ -58,7 +58,8 @@ class SupabasePaymentBridge:
             result = self._request("incoming_payments", method="POST", data=payload)
             return result[0] if isinstance(result, list) and len(result) > 0 else result
         except RuntimeError as e:
-            if "duplicate key" in str(e).lower() or "unique constraint" in str(e).lower():
+            err_str = str(e).lower()
+            if "duplicate" in err_str or "unique constraint" in err_str or "23505" in err_str or "409" in err_str:
                 print(f"[WARN] Duplicate UTR ignored: {utr}")
                 return {"duplicate": True, "utr": utr}
             raise e

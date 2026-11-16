@@ -1,22 +1,42 @@
 """
-termux_listener.py - Runs on Android phone inside Termux
-Requires: Termux:API (from F-Droid) and `pkg install termux-api`
-Usage: python termux_listener.py
+termux_listener.py - Production-grade Android SMS Listener
+Prevents loops, deduplicates via SHA-256 hashing, and ignores old past SMS.
 """
 
 import subprocess
 import json
 import time
 import os
+import hashlib
+from typing import Set, Dict, Any
 from bridge import SupabasePaymentBridge
 
 POLL_INTERVAL_SECONDS = 3
-SEEN_MESSAGES_CACHE_FILE = "seen_sms_ids.txt"
+SEEN_HASHES_FILE = "seen_sms_hashes.txt"
+
+def get_message_hash(msg: Dict[str, Any]) -> str:
+    """
+    Creates a unique 64-char SHA-256 hash for each SMS.
+    Guaranteed single-line, collision-free, handles multi-line bodies cleanly.
+    """
+    raw_str = f"{msg.get('number', '')}_{msg.get('received', '')}_{msg.get('date', '')}_{msg.get('body', '')}"
+    return hashlib.sha256(raw_str.encode("utf-8")).hexdigest()
+
+def load_seen_hashes() -> Set[str]:
+    seen = set()
+    if os.path.exists(SEEN_HASHES_FILE):
+        with open(SEEN_HASHES_FILE, "r") as f:
+            for line in f:
+                h = line.strip()
+                if h:
+                    seen.add(h)
+    return seen
+
+def save_seen_hash(msg_hash: str):
+    with open(SEEN_HASHES_FILE, "a") as f:
+        f.write(f"{msg_hash}\n")
 
 def get_recent_sms(limit: int = 5):
-    """
-    Calls termux-sms-list command to fetch recent incoming SMS.
-    """
     try:
         result = subprocess.run(
             ["termux-sms-list", "-l", str(limit), "-t", "inbox"],
@@ -24,24 +44,14 @@ def get_recent_sms(limit: int = 5):
             text=True,
             check=True
         )
-        return json.loads(result.stdout)
+        data = json.loads(result.stdout)
+        return data if isinstance(data, list) else []
     except FileNotFoundError:
-        print("[ERROR] 'termux-sms-list' not found. Make sure termux-api is installed:")
-        print("Run: pkg install termux-api and install Termux:API app from F-Droid.")
+        print("[ERROR] 'termux-sms-list' not found. Ensure termux-api is installed.")
         return []
     except Exception as e:
         print(f"[ERROR] Failed to read SMS via Termux: {e}")
         return []
-
-def load_seen_ids():
-    if os.path.exists(SEEN_MESSAGES_CACHE_FILE):
-        with open(SEEN_MESSAGES_CACHE_FILE, "r") as f:
-            return set(line.strip() for line in f if line.strip())
-    return set()
-
-def save_seen_id(sms_id: str):
-    with open(SEEN_MESSAGES_CACHE_FILE, "a") as f:
-        f.write(f"{sms_id}\n")
 
 def main():
     print("=" * 60)
@@ -50,25 +60,40 @@ def main():
     print("=" * 60)
 
     bridge = SupabasePaymentBridge()
-    seen_ids = load_seen_ids()
+    seen_hashes = load_seen_hashes()
+
+    # On initial boot, mark existing inbox messages as already seen
+    # so we don't re-trigger past payments on script restart!
+    print("🔍 Indexing existing inbox messages...")
+    initial_messages = get_recent_sms(limit=10)
+    new_indexed = 0
+    for m in initial_messages:
+        h = get_message_hash(m)
+        if h not in seen_hashes:
+            seen_hashes.add(h)
+            save_seen_hash(h)
+            new_indexed += 1
+    print(f"✅ Indexed {len(initial_messages)} existing messages. Now waiting for NEW incoming SMS...\n")
 
     while True:
         try:
             messages = get_recent_sms(limit=5)
             for msg in messages:
-                sms_id = str(msg.get("_id") or msg.get("received") or msg.get("body"))
-                if sms_id in seen_ids:
+                h = get_message_hash(msg)
+                
+                # Deduplication check: ignore if already processed
+                if h in seen_hashes:
                     continue
+
+                # Mark as seen IMMEDIATELY to prevent duplicate loops
+                seen_hashes.add(h)
+                save_seen_hash(h)
 
                 body = msg.get("body", "")
                 sender = msg.get("number", "UNKNOWN")
 
-                print(f"\n[NEW SMS from {sender}]: {body[:60]}...")
+                print(f"\n[🔔 NEW SMS from {sender}]: {body[:70]}...")
                 result = bridge.process_sms(body)
-
-                # Cache this SMS as processed
-                seen_ids.add(sms_id)
-                save_seen_id(sms_id)
 
         except KeyboardInterrupt:
             print("\nStopping Termux listener.")
