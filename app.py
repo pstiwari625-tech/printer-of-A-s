@@ -6,6 +6,9 @@ Open: http://localhost:5001
 import os
 import sqlite3
 import uuid
+import json
+import urllib.request
+import urllib.error
 from io import BytesIO
 from datetime import datetime, timezone
 
@@ -21,9 +24,20 @@ except ImportError:
     HEIC_SUPPORTED = False
 
 BASE = os.path.dirname(os.path.abspath(__file__))
-# Vercel Functions mount the deployed project as read-only.  Local development
-# keeps runtime data beside the app, while a serverless deployment must write
-# only to its temporary directory.
+# Load environment variables from .env
+def load_env():
+    for env_path in [os.path.join(BASE, ".env"), os.path.join(BASE, "payment-bridge", ".env")]:
+        if os.path.exists(env_path):
+            with open(env_path, "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        k, v = line.split("=", 1)
+                        if k.strip() not in os.environ:
+                            os.environ[k.strip()] = v.strip()
+
+load_env()
+
 RUNTIME_DIR = "/tmp" if os.environ.get("VERCEL") else BASE
 UPLOADS = os.path.join(RUNTIME_DIR, "uploads")
 DB = os.path.join(RUNTIME_DIR, "jobs.db")
@@ -35,8 +49,55 @@ MAX_PAGES = 100
 PI_TOKEN = os.environ.get("PI_TOKEN", "change-me")
 IMAGE_EXTENSIONS = {".bmp", ".gif", ".heic", ".heif", ".jpeg", ".jpg", ".png", ".tif", ".tiff", ".webp"}
 
+# Supabase & UPI Settings
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
+SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "") or os.environ.get("SUPABASE_KEY", "")
+UPI_VPA = os.environ.get("UPI_VPA", "yourvpa@bank")
+UPI_NAME = os.environ.get("UPI_NAME", "Printer of As")
+
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50 MB
+
+
+# ---------- Supabase Integration Helpers ----------
+def supabase_request(endpoint, method="GET", data=None):
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return None
+    url = f"{SUPABASE_URL}/rest/v1/{endpoint}"
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json",
+        "Prefer": "return=representation"
+    }
+    body = json.dumps(data).encode("utf-8") if data else None
+    req = urllib.request.Request(url, data=body, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            text = resp.read().decode("utf-8")
+            return json.loads(text) if text else None
+    except Exception as e:
+        print(f"[SUPABASE ERROR] {endpoint}: {e}")
+        return None
+
+
+def supabase_sync_job(job_dict):
+    """Syncs print job to Supabase so phone listener can reconcile it."""
+    payload = {
+        "id": job_dict["id"],
+        "filename": job_dict.get("filename", ""),
+        "stored": job_dict.get("stored", ""),
+        "pages": int(job_dict.get("pages", 1)),
+        "copies": int(job_dict.get("copies", 1)),
+        "color": job_dict.get("color", "bw"),
+        "duplex": int(job_dict.get("duplex", 0)),
+        "amount": float(job_dict.get("amount", 0.0)),
+        "reserved_paise_offset": int(job_dict.get("reserved_paise_offset", 0)),
+        "status": job_dict.get("status", "pending_payment"),
+        "created": job_dict.get("created", datetime.now(timezone.utc).isoformat()),
+        "notes": job_dict.get("notes", "")
+    }
+    return supabase_request("jobs", method="POST", data=payload)
 
 
 # ---------- database management ----------
@@ -60,18 +121,29 @@ def init_db():
         con.execute("""CREATE TABLE IF NOT EXISTS jobs (
             id TEXT PRIMARY KEY, filename TEXT, stored TEXT, pages INTEGER,
             copies INTEGER, color TEXT, duplex INTEGER, amount REAL,
-            status TEXT, created TEXT, notes TEXT DEFAULT '')""")
+            status TEXT, created TEXT, notes TEXT DEFAULT '',
+            utr_number TEXT DEFAULT '', reserved_paise_offset INTEGER DEFAULT 0)""")
         columns = [c[1] for c in con.execute("PRAGMA table_info(jobs)").fetchall()]
         if "notes" not in columns:
             con.execute("ALTER TABLE jobs ADD COLUMN notes TEXT DEFAULT ''")
+        if "utr_number" not in columns:
+            con.execute("ALTER TABLE jobs ADD COLUMN utr_number TEXT DEFAULT ''")
+        if "reserved_paise_offset" not in columns:
+            con.execute("ALTER TABLE jobs ADD COLUMN reserved_paise_offset INTEGER DEFAULT 0")
     con.close()
 
 
 init_db()
 
 
-def price(pages, copies, color):
-    return round(pages * copies * PRICE_PER_PAGE.get(color, 2.0), 2)
+def calculate_paise_offset(job_id):
+    """Generates a stable 11-99 paise offset per job to prevent payment collisions."""
+    return (abs(hash(job_id)) % 89) + 11
+
+
+def price(pages, copies, color, offset=0):
+    base = round(pages * copies * PRICE_PER_PAGE.get(color, 2.0), 2)
+    return round(base + (offset / 100.0), 2)
 
 
 def is_pdf_upload(file_storage):
@@ -114,6 +186,7 @@ PAGE_TEMPLATE = """<!doctype html>
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
   <style>
     :root {
       --bg: #171719;
@@ -1159,6 +1232,139 @@ PAGE_TEMPLATE = """<!doctype html>
         flex-direction: column;
       }
     }
+    /* UPI Payment Section */
+    .upi-payment-card {
+      background: var(--card-elevated);
+      border: 1px solid var(--accent-border);
+      border-radius: 12px;
+      padding: 24px;
+      margin-top: 24px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .upi-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--accent-muted);
+      color: var(--accent);
+      padding: 4px 12px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      margin-bottom: 12px;
+      border: 1px solid var(--accent-border);
+    }
+
+    .upi-qr-box {
+      background: #FFFFFF;
+      padding: 16px;
+      border-radius: 12px;
+      box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
+      margin: 16px 0;
+      display: inline-flex;
+      justify-content: center;
+      align-items: center;
+    }
+
+    .upi-amount-hero {
+      font-size: 2.2rem;
+      font-weight: 800;
+      color: #FFFFFF;
+      margin-bottom: 4px;
+      letter-spacing: -0.5px;
+    }
+
+    .upi-paise-note {
+      font-size: 12px;
+      color: var(--accent);
+      margin-bottom: 16px;
+      font-weight: 500;
+    }
+
+    .btn-upi-intent {
+      width: 100%;
+      background: #10B981;
+      color: #FFFFFF;
+      border: none;
+      padding: 14px 20px;
+      border-radius: 8px;
+      font-size: 15px;
+      font-weight: 700;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      text-decoration: none;
+      transition: all 0.2s;
+      margin-top: 10px;
+    }
+
+    .btn-upi-intent:hover {
+      background: #059669;
+      transform: translateY(-1px);
+    }
+
+    .pulse-container {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      color: var(--text-muted);
+      margin-top: 14px;
+    }
+
+    .pulse-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: #10B981;
+      box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
+      animation: pulseAnimation 1.6s infinite;
+    }
+
+    @keyframes pulseAnimation {
+      0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }
+      70% { transform: scale(1); box-shadow: 0 0 0 8px rgba(16, 185, 129, 0); }
+      100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+    }
+
+    .utr-fallback-box {
+      margin-top: 20px;
+      padding-top: 16px;
+      border-top: 1px solid var(--border-subtle);
+      width: 100%;
+      text-align: left;
+    }
+
+    .utr-input-group {
+      display: flex;
+      gap: 8px;
+      margin-top: 8px;
+    }
+
+    .utr-input {
+      flex: 1;
+      background: #171719;
+      border: 1px solid var(--border-subtle);
+      color: #FFFFFF;
+      padding: 10px 14px;
+      border-radius: 6px;
+      font-size: 14px;
+      outline: none;
+      font-family: inherit;
+    }
+
+    .utr-input:focus {
+      border-color: var(--accent);
+    }
   </style>
 </head>
 <body>
@@ -1796,16 +2002,30 @@ def upload():
         copies = 1
     duplex = 1 if request.form.get("duplex") else 0
 
+    offset = calculate_paise_offset(job_id)
+    calculated_amount = price(pages, copies, color, offset)
+    created_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
     con = get_db()
     with con:
         con.execute(
-            "INSERT INTO jobs VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            """INSERT INTO jobs (id, filename, stored, pages, copies, color, duplex, amount, status, created, notes, utr_number, reserved_paise_offset)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 job_id, display_name, stored, pages, copies, color,
-                duplex, price(pages, copies, color), "pending_payment",
-                datetime.now(timezone.utc).isoformat(timespec="seconds"), notes
+                duplex, calculated_amount, "pending_payment",
+                created_iso, notes, "", offset
             )
         )
+
+    # Sync with Supabase so Termux listener knows about it
+    supabase_sync_job({
+        "id": job_id, "filename": display_name, "stored": stored,
+        "pages": pages, "copies": copies, "color": color, "duplex": duplex,
+        "amount": calculated_amount, "reserved_paise_offset": offset,
+        "status": "pending_payment", "created": created_iso, "notes": notes
+    })
+
     return redirect(url_for("job", job_id=job_id))
 
 
@@ -1827,7 +2047,7 @@ def job(job_id):
           <h1 class="page-title" style="font-size: 1.9rem;">Job Specifications</h1>
           <p class="page-sub" style="margin-bottom: 18px;">{{ j['filename'] }} ({{ j['pages'] }} pages)</p>
         </div>
-        <span class="tag {{ j['status'] }}">{{ j['status'] }}</span>
+        <span class="tag {{ j['status'] }}" id="job-status-tag">{{ j['status'] }}</span>
       </div>
 
       <!-- Print Preview Actions -->
@@ -1842,58 +2062,208 @@ def job(job_id):
       </div>
 
       {% if j['status']=='pending_payment' %}
-      <form method="post" action="/job/{{ j['id'] }}/pay">
-        <div class="form-row">
-          <div>
-            <label class="field-label" for="opt-color">Colour Mode</label>
-            <select id="opt-color" name="color" class="field-select" onchange="updateJobPricing()">
-              <option value="bw" {% if j['color']=='bw' %}selected{% endif %}>Black &amp; white ({{ cur }}{{ p['bw'] }} / page)</option>
-              <option value="color" {% if j['color']=='color' %}selected{% endif %}>Full colour ({{ cur }}{{ p['color'] }} / page)</option>
-            </select>
-          </div>
-          <div>
-            <label class="field-label" for="opt-copies">Copies</label>
-            <input id="opt-copies" type="number" name="copies" class="field-input" value="{{ j['copies'] }}" min="1" max="20" onchange="updateJobPricing()" oninput="updateJobPricing()">
-          </div>
+      <div class="form-row">
+        <div>
+          <label class="field-label" for="opt-color">Colour Mode</label>
+          <select id="opt-color" name="color" class="field-select" onchange="updateJobPricing()">
+            <option value="bw" {% if j['color']=='bw' %}selected{% endif %}>Black &amp; white ({{ cur }}{{ p['bw'] }} / page)</option>
+            <option value="color" {% if j['color']=='color' %}selected{% endif %}>Full colour ({{ cur }}{{ p['color'] }} / page)</option>
+          </select>
+        </div>
+        <div>
+          <label class="field-label" for="opt-copies">Copies</label>
+          <input id="opt-copies" type="number" name="copies" class="field-input" value="{{ j['copies'] }}" min="1" max="20" onchange="updateJobPricing()" oninput="updateJobPricing()">
+        </div>
+      </div>
+
+      <label class="checkbox-row" for="opt-duplex">
+        <input type="checkbox" name="duplex" value="1" id="opt-duplex" onchange="updateJobPricing()" {% if j['duplex'] %}checked{% endif %}>
+        <span class="checkbox-label-text">Print on both sides (Duplex)</span>
+      </label>
+
+      <table class="data-table">
+        <tr><th>Job ID</th><td><code>{{ j['id'] }}</code></td></tr>
+        {% if j['notes'] %}
+        <tr><th>Included Documents</th><td>{{ j['notes'] }}</td></tr>
+        {% endif %}
+        <tr><th>Document Pages</th><td>{{ j['pages'] }} pages</td></tr>
+        <tr><th>Unit Rate</th><td id="display-rate">{{ cur }}{{ rate }} / page</td></tr>
+        <tr class="total-row"><th>Total Payable</th><td id="display-total">{{ cur }}{{ '%.2f'|format(j['amount']) }}</td></tr>
+      </table>
+
+      <!-- Autonomous UPI Payment Card -->
+      <div class="upi-payment-card" id="upi-card">
+        <div class="upi-badge">⚡ Autonomous UPI Payment</div>
+        <div class="upi-amount-hero" id="hero-amount">{{ cur }}{{ '%.2f'|format(j['amount']) }}</div>
+        <div class="upi-paise-note">Scan with GPay, PhonePe, Paytm, or any UPI App</div>
+
+        <!-- Dynamic QR Code Container -->
+        <div class="upi-qr-box" id="qrcode-container"></div>
+
+        <!-- Mobile UPI Intent Deep Link -->
+        <a id="btn-upi-intent" href="upi://pay?pa={{ upi_vpa }}&pn={{ upi_name }}&am={{ '%.2f'|format(j['amount']) }}&cu=INR&tn=Job_{{ j['id'] }}" class="btn-upi-intent">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"></path></svg>
+          Pay with UPI App (Mobile)
+        </a>
+
+        <!-- Live Listener Status Pulse -->
+        <div class="pulse-container" id="status-container">
+          <div class="pulse-dot"></div>
+          <span id="status-label">Listening for bank SMS confirmation...</span>
         </div>
 
-        <label class="checkbox-row" for="opt-duplex">
-          <input type="checkbox" name="duplex" value="1" id="opt-duplex" {% if j['duplex'] %}checked{% endif %}>
-          <span class="checkbox-label-text">Print on both sides (Duplex)</span>
-        </label>
+        <!-- Manual UTR Fallback -->
+        <div class="utr-fallback-box">
+          <span style="font-size: 13px; color: var(--text-muted); font-weight: 600;">Paid but not updating? Enter 12-digit UPI UTR / Ref No:</span>
+          <div class="utr-input-group">
+            <input type="text" id="manual-utr" class="utr-input" placeholder="e.g. 432187654321" maxlength="12">
+            <button type="button" class="btn-secondary" onclick="submitManualUtr()" style="padding: 10px 16px; color: #FFFFFF; border-color: var(--accent); background: var(--card-bg);">Verify</button>
+          </div>
+          <div id="utr-feedback" style="font-size: 12px; margin-top: 6px; display: none;"></div>
+        </div>
 
-        <table class="data-table">
-          <tr><th>Job ID</th><td><code>{{ j['id'] }}</code></td></tr>
-          {% if j['notes'] %}
-          <tr><th>Included Documents</th><td>{{ j['notes'] }}</td></tr>
-          {% endif %}
-          <tr><th>Document Pages</th><td>{{ j['pages'] }} pages</td></tr>
-          <tr><th>Unit Rate</th><td id="display-rate">{{ cur }}{{ rate }} / page</td></tr>
-          <tr class="total-row"><th>Total Payable</th><td id="display-total">{{ cur }}{{ '%.2f'|format(j['amount']) }}</td></tr>
-        </table>
-
-        <button type="submit" class="btn-submit" id="btn-pay-submit">
-          <span id="btn-pay-text">Pay {{ cur }}{{ '%.2f'|format(j['amount']) }} &amp; Send to Queue</span>
-        </button>
-      </form>
-      <p style="color: var(--text-muted); font-size: 13px; margin-top: 14px; text-align: center;">
-        Payment simulation enabled. Clicking advances job into the print queue.
-      </p>
+        <!-- Fast Dev Simulator (Optional) -->
+        <form method="post" action="/job/{{ j['id'] }}/pay" style="margin-top: 14px; width: 100%;">
+          <button type="submit" style="background: none; border: none; color: var(--text-muted); font-size: 12px; text-decoration: underline; cursor: pointer;">
+            (Testing: Click here to simulate immediate payment)
+          </button>
+        </form>
+      </div>
 
       <script>
-        const basePages = {{ j['pages'] }};
-        const rates = { "bw": {{ p['bw'] }}, "color": {{ p['color'] }} };
+        const jobId = "{{ j['id'] }}";
+        const upiVpa = "{{ upi_vpa }}";
+        const upiName = "{{ upi_name }}";
+        let currentAmount = "{{ '%.2f'|format(j['amount']) }}";
         const currencySymbol = "{{ cur }}";
-        function updateJobPricing() {
+        let qrCodeInstance = null;
+
+        function getUpiUri(amt) {
+          return `upi://pay?pa=${encodeURIComponent(upiVpa)}&pn=${encodeURIComponent(upiName)}&am=${amt}&cu=INR&tn=Job_${jobId}`;
+        }
+
+        function renderQrCode(amt) {
+          const container = document.getElementById('qrcode-container');
+          if (!container) return;
+          container.innerHTML = '';
+          const uri = getUpiUri(amt);
+          const intentBtn = document.getElementById('btn-upi-intent');
+          if (intentBtn) intentBtn.href = uri;
+          
+          try {
+            qrCodeInstance = new QRCode(container, {
+              text: uri,
+              width: 170,
+              height: 170,
+              colorDark: "#000000",
+              colorLight: "#ffffff",
+              correctLevel: QRCode.CorrectLevel.M
+            });
+          } catch(e) {
+            console.error("QR Code Error:", e);
+          }
+        }
+
+        // Render QR on page load
+        renderQrCode(currentAmount);
+
+        // Real-Time Payment Polling (Every 2 seconds)
+        const pollInterval = setInterval(checkPaymentStatus, 2000);
+
+        async function checkPaymentStatus() {
+          try {
+            const resp = await fetch(`/api/job/${jobId}/payment-status`);
+            const data = await resp.json();
+            if (data.is_paid) {
+              clearInterval(pollInterval);
+              const card = document.getElementById('upi-card');
+              if (card) {
+                card.style.borderColor = "var(--accent)";
+                card.innerHTML = `
+                  <div style="padding: 24px 10px;">
+                    <div style="font-size: 40px; margin-bottom: 12px;">🎉</div>
+                    <h2 style="color: var(--accent); font-size: 1.5rem; margin-bottom: 8px;">Payment Verified!</h2>
+                    <p style="color: var(--text-muted); font-size: 14px; margin-bottom: 6px;">UTR / Ref: <code>${data.utr || 'Auto-Verified'}</code></p>
+                    <p style="color: #FFFFFF; font-weight: 600;">Sending your document to the printer queue...</p>
+                  </div>
+                `;
+              }
+              const tag = document.getElementById('job-status-tag');
+              if (tag) {
+                tag.className = 'tag queued';
+                tag.textContent = 'queued';
+              }
+              setTimeout(() => {
+                window.location.href = `/queue?just=${jobId}`;
+              }, 1200);
+            }
+          } catch (err) {
+            console.warn("Status poll error:", err);
+          }
+        }
+
+        // Manual UTR Submission Fallback
+        async function submitManualUtr() {
+          const utrInput = document.getElementById('manual-utr');
+          const fb = document.getElementById('utr-feedback');
+          const utrVal = (utrInput.value || '').trim();
+          if (utrVal.length !== 12 || !/^\\d+$/.test(utrVal)) {
+            fb.style.display = 'block';
+            fb.style.color = '#F87171';
+            fb.textContent = 'Please enter a valid 12-digit numeric UTR.';
+            return;
+          }
+          fb.style.display = 'block';
+          fb.style.color = 'var(--text-muted)';
+          fb.textContent = 'Verifying with Supabase...';
+
+          try {
+            const res = await fetch(`/api/job/${jobId}/verify-utr`, {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({utr: utrVal})
+            });
+            const data = await res.json();
+            if (data.ok) {
+              fb.style.color = 'var(--accent)';
+              fb.textContent = 'Payment Confirmed! Redirecting...';
+              setTimeout(() => { window.location.href = `/queue?just=${jobId}`; }, 800);
+            } else {
+              fb.style.color = '#F87171';
+              fb.textContent = data.message || 'Verification failed.';
+            }
+          } catch (e) {
+            fb.style.color = '#F87171';
+            fb.textContent = 'Error connecting to server.';
+          }
+        }
+
+        // Dynamic Options Update (Colour/Copies/Duplex)
+        async function updateJobPricing() {
           const colorEl = document.getElementById('opt-color');
           const copiesEl = document.getElementById('opt-copies');
+          const duplexEl = document.getElementById('opt-duplex');
           const colorVal = colorEl ? colorEl.value : 'bw';
           const copiesVal = Math.max(1, Math.min(20, parseInt(copiesEl.value) || 1));
-          const rateVal = rates[colorVal] || 2.0;
-          const totalVal = (basePages * copiesVal * rateVal).toFixed(2);
-          document.getElementById('display-rate').textContent = currencySymbol + rateVal.toFixed(1) + ' / page';
-          document.getElementById('display-total').textContent = currencySymbol + totalVal;
-          document.getElementById('btn-pay-text').textContent = 'Pay ' + currencySymbol + totalVal + ' & Send to Queue';
+          const duplexVal = duplexEl && duplexEl.checked ? 1 : 0;
+
+          try {
+            const res = await fetch(`/api/job/${jobId}/update-options`, {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({color: colorVal, copies: copiesVal, duplex: duplexVal})
+            });
+            const data = await res.json();
+            if (data.ok) {
+              currentAmount = data.amount.toFixed(2);
+              document.getElementById('display-rate').textContent = currencySymbol + data.rate.toFixed(1) + ' / page';
+              document.getElementById('display-total').textContent = currencySymbol + currentAmount;
+              document.getElementById('hero-amount').textContent = currencySymbol + currentAmount;
+              renderQrCode(currentAmount);
+            }
+          } catch (err) {
+            console.error("Update error:", err);
+          }
         }
       </script>
       {% else %}
@@ -1916,7 +2286,8 @@ def job(job_id):
       </div>
       {% endif %}
     </div>
-    """, j=j, cur=CURRENCY, p=PRICE_PER_PAGE, rate=PRICE_PER_PAGE.get(j["color"], 2.0))
+    """, j=j, cur=CURRENCY, p=PRICE_PER_PAGE, rate=PRICE_PER_PAGE.get(j["color"], 2.0),
+       upi_vpa=UPI_VPA, upi_name=UPI_NAME)
 
 
 @app.get("/job/<job_id>/preview")
@@ -1927,23 +2298,105 @@ def job_preview(job_id):
 
 @app.post("/job/<job_id>/pay")
 def pay(job_id):
+    """Fallback payment simulation route."""
     j = get_job(job_id)
-    color = request.form.get("color", j["color"])
-    if color not in PRICE_PER_PAGE:
-        color = "bw"
-    try:
-        copies = max(1, min(20, int(request.form.get("copies", j["copies"]))))
-    except (ValueError, TypeError):
-        copies = 1
-    duplex = 1 if request.form.get("duplex") else 0
-    updated_amount = price(j["pages"], copies, color)
     con = get_db()
     with con:
         con.execute(
-            "UPDATE jobs SET status='queued', color=?, copies=?, duplex=?, amount=? WHERE id=? AND status='pending_payment'",
-            (color, copies, duplex, updated_amount, job_id)
+            "UPDATE jobs SET status='queued' WHERE id=? AND status='pending_payment'",
+            (job_id,)
         )
+    if SUPABASE_URL:
+        supabase_request(f"jobs?id=eq.{job_id}", method="PATCH", data={"status": "queued"})
     return redirect(url_for("queue", just=job_id))
+
+
+# ---------- Payment & Kiosk Status APIs ----------
+@app.get("/api/job/<job_id>/payment-status")
+def payment_status(job_id):
+    con = get_db()
+    row = con.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+    if not row:
+        return jsonify(error="Job not found"), 404
+
+    status = row["status"]
+    utr = row["utr_number"] if "utr_number" in row.keys() else ""
+
+    # Check Supabase if local is still pending
+    if status == "pending_payment" and SUPABASE_URL:
+        supa_jobs = supabase_request(f"jobs?id=eq.{job_id}&select=*")
+        if supa_jobs and len(supa_jobs) > 0:
+            remote_job = supa_jobs[0]
+            remote_status = remote_job.get("status")
+            if remote_status in ("queued", "printing", "done"):
+                status = remote_status
+                utr = remote_job.get("utr_number", "")
+                with con:
+                    con.execute("UPDATE jobs SET status=?, utr_number=? WHERE id=?", (status, utr, job_id))
+
+    return jsonify({
+        "id": job_id,
+        "status": status,
+        "is_paid": status in ("queued", "printing", "done"),
+        "utr": utr
+    })
+
+
+@app.post("/api/job/<job_id>/verify-utr")
+def verify_utr(job_id):
+    data = request.get_json(silent=True) or {}
+    utr = str(data.get("utr", "")).strip()
+    if len(utr) != 12 or not utr.isdigit():
+        return jsonify(ok=False, message="Please enter a valid 12-digit UTR number."), 400
+
+    con = get_db()
+    row = con.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+    if not row:
+        return jsonify(ok=False, message="Job not found"), 404
+
+    # Update local SQLite
+    with con:
+        con.execute("UPDATE jobs SET status='queued', utr_number=? WHERE id=?", (utr, job_id))
+
+    # Update Supabase
+    if SUPABASE_URL:
+        supabase_request(f"jobs?id=eq.{job_id}", method="PATCH", data={"status": "queued", "utr_number": utr})
+        supabase_request(f"incoming_payments?utr_number=eq.{utr}", method="PATCH", data={"is_consumed": True, "matched_job_id": job_id})
+
+    return jsonify(ok=True, message="Payment verified!")
+
+
+@app.post("/api/job/<job_id>/update-options")
+def update_options(job_id):
+    data = request.get_json(silent=True) or {}
+    j = get_job(job_id)
+
+    color = data.get("color", j["color"])
+    if color not in PRICE_PER_PAGE:
+        color = "bw"
+    try:
+        copies = max(1, min(20, int(data.get("copies", j["copies"]))))
+    except (ValueError, TypeError):
+        copies = 1
+    duplex = 1 if data.get("duplex") else 0
+
+    offset = j["reserved_paise_offset"] if "reserved_paise_offset" in j.keys() else calculate_paise_offset(job_id)
+    new_amount = price(j["pages"], copies, color, offset)
+
+    con = get_db()
+    with con:
+        con.execute(
+            "UPDATE jobs SET color=?, copies=?, duplex=?, amount=? WHERE id=?",
+            (color, copies, duplex, new_amount, job_id)
+        )
+
+    if SUPABASE_URL:
+        supabase_request(f"jobs?id=eq.{job_id}", method="PATCH", data={
+            "color": color, "copies": copies, "duplex": duplex, "amount": new_amount
+        })
+
+    rate = PRICE_PER_PAGE.get(color, 2.0)
+    return jsonify(ok=True, amount=new_amount, rate=rate)
 
 
 @app.get("/queue")
