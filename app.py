@@ -2033,6 +2033,23 @@ def upload():
 def get_job(job_id):
     con = get_db()
     row = con.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+    if not row and SUPABASE_URL:
+        supa_jobs = supabase_request(f"jobs?id=eq.{job_id}&select=*")
+        if supa_jobs and len(supa_jobs) > 0:
+            sj = supa_jobs[0]
+            with con:
+                con.execute(
+                    """INSERT OR IGNORE INTO jobs (id, filename, stored, pages, copies, color, duplex, amount, status, created, notes, utr_number, reserved_paise_offset)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (
+                        sj["id"], sj.get("filename", ""), sj.get("stored", ""),
+                        int(sj.get("pages", 1)), int(sj.get("copies", 1)), sj.get("color", "bw"),
+                        int(sj.get("duplex", 0)), float(sj.get("amount", 0.0)), sj.get("status", "pending_payment"),
+                        sj.get("created", ""), sj.get("notes", ""), sj.get("utr_number", ""), int(sj.get("reserved_paise_offset", 0))
+                    )
+                )
+            row = con.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+
     if not row:
         abort(404)
     return row
@@ -2357,6 +2374,23 @@ def pay(job_id):
 def payment_status(job_id):
     con = get_db()
     row = con.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+    if not row and SUPABASE_URL:
+        supa_jobs = supabase_request(f"jobs?id=eq.{job_id}&select=*")
+        if supa_jobs and len(supa_jobs) > 0:
+            sj = supa_jobs[0]
+            with con:
+                con.execute(
+                    """INSERT OR IGNORE INTO jobs (id, filename, stored, pages, copies, color, duplex, amount, status, created, notes, utr_number, reserved_paise_offset)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (
+                        sj["id"], sj.get("filename", ""), sj.get("stored", ""),
+                        int(sj.get("pages", 1)), int(sj.get("copies", 1)), sj.get("color", "bw"),
+                        int(sj.get("duplex", 0)), float(sj.get("amount", 0.0)), sj.get("status", "pending_payment"),
+                        sj.get("created", ""), sj.get("notes", ""), sj.get("utr_number", ""), int(sj.get("reserved_paise_offset", 0))
+                    )
+                )
+            row = con.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+
     if not row:
         return jsonify(error="Job not found"), 404
 
