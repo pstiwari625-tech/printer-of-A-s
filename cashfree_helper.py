@@ -254,6 +254,12 @@ def get_or_create_cashfree_session(job_id: str, amount: float, notify_url: Optio
         except Exception as e:
             print(f"[WARN] Could not fetch Cashfree links: {e}")
 
+        if not links.get("web") and session_id:
+            hosted_link = f"https://payments.cashfree.com/order/#{session_id}"
+            links["web"] = hosted_link
+            if not links.get("default"):
+                links["default"] = hosted_link
+
         cfg = get_config()
         session_info = {
             "order_id": order_id,

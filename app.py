@@ -2809,6 +2809,13 @@ def job(job_id):
           Pay with UPI App (Mobile)
         </a>
 
+        {% if cf_session and cf_session.get('env') == 'production' and cf_session.get('links', {}).get('web') %}
+        <!-- Cashfree Hosted Checkout Button -->
+        <a id="btn-cf-checkout" href="{{ cf_session['links']['web'] }}" target="_blank" rel="noopener noreferrer" class="btn-secondary" style="display: flex; align-items: center; justify-content: center; gap: 8px; margin-top: 10px; padding: 12px 18px; font-size: 14px; text-decoration: none; border-color: rgba(141, 235, 181, 0.4); background: rgba(141, 235, 181, 0.08); color: #8DEBB5;">
+          ⚡ Pay via Cashfree Checkout (All UPI &amp; Cards) ↗
+        </a>
+        {% endif %}
+
         {% if cf_session and cf_session.get('env') == 'sandbox' %}
         <!-- Cashfree Sandbox Simulator Button -->
         <div id="cf-simulator-box" style="background: rgba(139, 92, 246, 0.12); border: 1px dashed #A78BFA; border-radius: 8px; padding: 12px; margin-top: 14px; text-align: center;">
