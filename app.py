@@ -9,6 +9,9 @@ import uuid
 import json
 import urllib.request
 import urllib.error
+import threading
+import time
+import random
 from io import BytesIO
 from datetime import datetime, timezone
 
@@ -58,6 +61,40 @@ UPI_NAME = os.environ.get("UPI_NAME", "Ankur Tiwari")
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50 MB
+
+
+# ---------- Render Anti-Sleep Randomized Keep-Alive Daemon ----------
+USER_AGENTS_POOL = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Mobile/15E148 Safari/604.1",
+    "Mozilla/5.0 (Linux; Android 14; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.6261.64 Mobile Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0"
+]
+
+def _render_keep_alive_worker():
+    time.sleep(random.randint(45, 90))
+    render_url = os.environ.get("RENDER_EXTERNAL_URL", "https://printer-of-a-s.onrender.com").rstrip("/")
+    ping_url = f"{render_url}/health"
+
+    while True:
+        # Randomized interval between 10 and 14 minutes (600 to 840 seconds)
+        # Any random minute (10, 11, 12, 13, 14) and any random second (0 to 59)
+        sleep_secs = random.randint(600, 840)
+        time.sleep(sleep_secs)
+        try:
+            ua = random.choice(USER_AGENTS_POOL)
+            req = urllib.request.Request(ping_url, headers={"User-Agent": ua, "Accept": "application/json, text/html, */*"})
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                mins = sleep_secs // 60
+                secs = sleep_secs % 60
+                print(f"[RANDOM KEEP-ALIVE] Pinged {ping_url} (HTTP {resp.status}). Randomized interval: {mins}m {secs}s.")
+        except Exception as e:
+            print(f"[RANDOM KEEP-ALIVE] Ping warning: {e}")
+
+if os.environ.get("RENDER") or os.environ.get("RENDER_EXTERNAL_URL") or os.environ.get("ENABLE_KEEP_ALIVE"):
+    _t = threading.Thread(target=_render_keep_alive_worker, daemon=True, name="RenderAntiSleep")
+    _t.start()
 
 
 # ---------- Supabase Integration Helpers ----------
@@ -2079,6 +2116,11 @@ def render_page(body_template, **ctx):
 
 
 # ---------- User-Facing Routes ----------
+@app.get("/health")
+def health():
+    return jsonify(status="ok", service="printer-of-as"), 200
+
+
 @app.get("/")
 def index():
     return render_page("""
