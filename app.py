@@ -3972,11 +3972,47 @@ def pwa_manifest():
     })
 
 
+_LAST_SUPA_SYNC = 0.0
+
+def sync_supabase_queue(con, force=False):
+    global _LAST_SUPA_SYNC
+    now = time.time()
+    if not SUPABASE_URL:
+        return
+    # Throttle Supabase sync to once every 2.5s unless forced
+    if not force and (now - _LAST_SUPA_SYNC < 2.5):
+        return
+
+    _LAST_SUPA_SYNC = now
+    try:
+        supa_jobs = supabase_request("jobs?status=in.(queued,printing)&select=*&order=created.asc&limit=100")
+        if supa_jobs is not None:
+            active_ids = {sj["id"] for sj in supa_jobs}
+            with con:
+                for sj in supa_jobs:
+                    con.execute("""INSERT OR REPLACE INTO jobs 
+                        (id, filename, stored, pages, copies, color, duplex, amount, status, created, notes, utr_number, reserved_paise_offset)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (sj["id"], sj.get("filename", "document.pdf"), sj.get("stored", f"{sj['id']}.pdf"),
+                         int(sj.get("pages", 1)), int(sj.get("copies", 1)), sj.get("color", "bw"),
+                         1 if sj.get("duplex") else 0, float(sj.get("amount", 2.0)), sj.get("status", "queued"),
+                         sj.get("created", ""), sj.get("notes", ""), sj.get("utr_number", ""), int(sj.get("reserved_paise_offset", 0)))
+                    )
+                # Clear any local jobs that are no longer active in Supabase
+                local_active = con.execute("SELECT id FROM jobs WHERE status IN ('queued', 'printing')").fetchall()
+                for la in local_active:
+                    if la["id"] not in active_ids:
+                        con.execute("UPDATE jobs SET status='done' WHERE id=?", (la["id"],))
+    except Exception as e:
+        print(f"[KIOSK SUPABASE SYNC ERROR] {e}")
+
+
 @app.get("/api/next-job")
 def next_job():
     """Tablet or Pi polls this. Returns the oldest queued job and marks it 'printing'."""
     require_pi()
     con = get_db()
+    sync_supabase_queue(con)
     with con:
         row = con.execute("""SELECT * FROM jobs WHERE status='queued'
                              ORDER BY created ASC LIMIT 1""").fetchone()
@@ -4004,9 +4040,10 @@ def kiosk_queue():
     """Returns currently queued and printing jobs for the live kiosk monitor."""
     require_pi()
     con = get_db()
+    sync_supabase_queue(con)
     rows = con.execute("""SELECT id, filename, pages, copies, color, duplex, status, amount, created 
                           FROM jobs WHERE status IN ('queued', 'printing') 
-                          ORDER BY created ASC LIMIT 50""").fetchall()
+                          ORDER BY CASE WHEN status='printing' THEN 0 ELSE 1 END, created ASC LIMIT 50""").fetchall()
     return jsonify(ok=True, jobs=[dict(r) for r in rows])
 
 
@@ -4571,19 +4608,20 @@ def kiosk_station():
           <span style="font-size: 12px; font-weight: 700; color: #10B981;" id="queue-count-badge">0 WAITING</span>
         </div>
 
-        <div style="max-height: 220px; overflow-y: auto;">
+        <div style="max-height: 380px; overflow-y: auto;">
           <table class="queue-table">
             <thead>
               <tr>
-                <th>Job</th>
+                <th>#</th>
                 <th>File</th>
                 <th>Specs</th>
                 <th>Status</th>
+                <th>Action</th>
               </tr>
             </thead>
             <tbody id="queue-tbody">
               <tr>
-                <td colspan="4" style="text-align: center; color: var(--text-muted); padding: 24px;">Queue is currently empty</td>
+                <td colspan="5" style="text-align: center; color: var(--text-muted); padding: 24px;">Queue is currently empty</td>
               </tr>
             </tbody>
           </table>
@@ -4844,27 +4882,64 @@ def kiosk_station():
       }
     }
 
+    let lastFetchedJobs = [];
+
     function updateQueueTable(jobs) {
+      lastFetchedJobs = jobs;
       const tbody = document.getElementById('queue-tbody');
       const badge = document.getElementById('queue-count-badge');
       if (!tbody) return;
 
       const queuedOnly = jobs.filter(j => j.status === 'queued');
-      badge.textContent = `${queuedOnly.length} WAITING`;
+      badge.textContent = `${queuedOnly.length} WAITING (${jobs.length} TOTAL)`;
 
       if (jobs.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--text-muted); padding: 24px;">Queue is currently empty</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: var(--text-muted); padding: 24px;">Queue is currently empty</td></tr>';
         return;
       }
 
       tbody.innerHTML = jobs.map((j, i) => `
         <tr>
-          <td><code>#${j.id.substring(0, 6)}</code></td>
-          <td style="font-weight: 600; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${j.filename}</td>
-          <td>${j.pages}p • ${j.copies}c • ${j.color.toUpperCase()}</td>
+          <td><span style="font-weight: 700; color: #10B981;">#${i+1}</span><br><code style="font-size: 10px; color: var(--text-muted);">${j.id.substring(0, 6)}</code></td>
+          <td style="font-weight: 600; max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${j.filename}">${j.filename}</td>
+          <td>${j.pages}p • ${j.copies}c<br><span style="font-size: 10px; color: var(--text-muted);">${j.color.toUpperCase()}</span></td>
           <td><span class="chip" style="font-size: 11px; padding: 3px 8px; color: ${j.status==='printing' ? '#10B981':'#60A5FA'};">${j.status.toUpperCase()}</span></td>
+          <td>
+            ${j.status === 'printing' ? 
+              `<button type="button" class="btn-kiosk" style="padding: 4px 8px; font-size: 11px; border-color: #10B981; color: #10B981;" onclick="markJobDone('${j.id}')">Done ✓</button>` :
+              `<button type="button" class="btn-kiosk" style="padding: 4px 8px; font-size: 11px;" onclick="claimSpecificJob('${j.id}')">Print ▶</button>`
+            }
+          </td>
         </tr>
       `).join('');
+    }
+
+    async function markJobDone(jobId) {
+      logTerminal(`[MANUAL] Marking Job #${jobId} DONE...`, "term-info");
+      try {
+        const res = await fetch(`/api/job/${jobId}/status?token=${encodeURIComponent(kioskToken)}`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${kioskToken}`
+          },
+          body: JSON.stringify({ status: 'done' })
+        });
+        if (res.ok) {
+          logTerminal(`[JOB ${jobId}] Marked DONE. Zero-Retention: Cloud copy purged!`, "term-success");
+          pollQueue();
+        }
+      } catch(e) {
+        logTerminal(`[ERROR] Could not complete job: ${e.message}`, "term-warn");
+      }
+    }
+
+    async function claimSpecificJob(jobId) {
+      const job = lastFetchedJobs.find(j => j.id === jobId);
+      if (job && !isProcessing) {
+        job.file_url = `/api/job/${job.id}/file?token=${encodeURIComponent(kioskToken)}`;
+        await processJob(job);
+      }
     }
 
     // Process a single job
