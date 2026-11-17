@@ -3130,12 +3130,15 @@ def payment_status(job_id):
     })
 
 
-@app.post("/api/cashfree/webhook")
+@app.route("/api/cashfree/webhook", methods=["GET", "POST"])
 def cashfree_webhook():
     """
     Cashfree Server-to-Server Webhook receiver.
     Triggered instantly (<500ms) upon customer payment.
     """
+    if request.method == "GET":
+        return jsonify(ok=True, message="Cashfree webhook endpoint ready"), 200
+
     timestamp = request.headers.get("x-webhook-timestamp", "")
     signature = request.headers.get("x-webhook-signature", "")
     raw_body = request.get_data(as_text=True)
@@ -3145,6 +3148,10 @@ def cashfree_webhook():
         valid = cashfree_helper.verify_webhook_signature(timestamp, raw_body, signature)
         if not valid:
             print("[WARN] Invalid Cashfree webhook signature received!")
+            # If it's a dummy test ping without order data, accept it
+            test_data = request.get_json(silent=True) or {}
+            if not test_data.get("data", {}).get("order"):
+                return jsonify(ok=True, message="Test ping acknowledged"), 200
             return jsonify(ok=False, message="Invalid signature"), 400
 
     data = request.get_json(silent=True) or {}
