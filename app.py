@@ -295,6 +295,7 @@ PAGE_TEMPLATE = """<!doctype html>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <script src="https://sdk.cashfree.com/js/v3/cashfree.js"></script>
   <style>
     :root {
       --bg: #171719;
@@ -2730,14 +2731,51 @@ def get_job(job_id):
     return row
 
 
+def get_public_base_url():
+    """
+    Returns public HTTPS base URL for Cashfree callbacks and redirects.
+    Ensures 'https://' is strictly used since Cashfree production rejects 'http://'.
+    """
+    host = request.headers.get("x-forwarded-host") or request.host
+    if "localhost" in host or "127.0.0.1" in host:
+        return "https://printer-of-a-s.onrender.com"
+    return f"https://{host}"
+
+
 @app.get("/job/<job_id>")
 def job(job_id):
     j = get_job(job_id)
+
+    # Check if user returned from Cashfree checkout via return_url
+    cf_order_id = request.args.get("cf_order_id")
+    if cf_order_id and j["status"] == "pending_payment" and cashfree_helper.is_cashfree_configured():
+        order_info = cashfree_helper.get_order_status(cf_order_id)
+        if order_info and order_info.get("order_status") == "PAID":
+            payments = cashfree_helper.get_order_payments(cf_order_id)
+            utr = "Cashfree-Auto"
+            if payments and isinstance(payments, list) and len(payments) > 0:
+                utr = str(payments[0].get("bank_reference") or payments[0].get("cf_payment_id") or "Cashfree-Auto")
+            con = get_db()
+            with con:
+                con.execute("UPDATE jobs SET status='queued', utr_number=? WHERE id=?", (utr, job_id))
+            if SUPABASE_URL:
+                supabase_request(f"jobs?id=eq.{job_id}", method="PATCH", data={"status": "queued", "utr_number": utr})
+                supabase_request("incoming_payments", method="POST", data={
+                    "amount": float(j["amount"]),
+                    "utr_number": utr,
+                    "raw_message": f"Cashfree Return URL Verification for {job_id}",
+                    "sender_info": "Cashfree Return URL",
+                    "is_consumed": True,
+                    "matched_job_id": job_id
+                })
+            return redirect(url_for("queue", just=job_id))
+
     cf_session = None
     if cashfree_helper.is_cashfree_configured() and j["status"] == "pending_payment":
-        base_url = request.host_url.rstrip("/")
+        base_url = get_public_base_url()
         notify_url = f"{base_url}/api/cashfree/webhook"
-        cf_session = cashfree_helper.get_or_create_cashfree_session(job_id, j["amount"], notify_url=notify_url)
+        return_url = f"{base_url}/job/{job_id}?cf_order_id={{order_id}}"
+        cf_session = cashfree_helper.get_or_create_cashfree_session(job_id, j["amount"], notify_url=notify_url, return_url=return_url)
 
     return render_page("""
     <div class="card">
@@ -2790,45 +2828,75 @@ def job(job_id):
         <tr class="total-row"><th>Total Payable</th><td id="display-total">{{ cur }}{{ '%.2f'|format(j['amount']) }}</td></tr>
       </table>
 
-      <!-- Autonomous UPI Payment Card -->
+      <!-- Autonomous Payment Card -->
       <div class="upi-payment-card" id="upi-card">
-        <div class="upi-badge">{% if cf_session %}⚡ Cashfree PG Active ({{ cf_session.get('env', 'live').upper() }}){% else %}⚡ Direct UPI Mode (Paytm){% endif %}</div>
+        {% if cf_session and cf_session.get('session_id') %}
+        <!-- Cashfree Official Gateway View -->
+        <div class="upi-badge" style="background: rgba(16, 185, 129, 0.15); color: #10B981; border: 1px solid rgba(16, 185, 129, 0.3);">
+          ⚡ Cashfree Official Gateway ({{ cf_session.get('env', 'live').upper() }})
+        </div>
         <div class="upi-amount-hero" id="hero-amount">{{ cur }}{{ '%.2f'|format(j['amount']) }}</div>
-        <div class="upi-paise-note">{% if cf_session %}Scan with GPay, PhonePe, Paytm, or any UPI App{% else %}Direct UPI Fallback: {{ upi_vpa }}{% endif %}</div>
-
-        <!-- Dynamic QR Code Container -->
-        <div class="upi-qr-box" id="qrcode-container">
-          {% if cf_session and cf_session.get('qr_data') %}
-          <img id="cf-qr-img" src="{{ cf_session['qr_data'] }}" alt="Cashfree UPI QR" style="width: 170px; height: 170px; display: block; border-radius: 8px;">
-          {% endif %}
+        <div class="upi-paise-note" style="color: #A1A1AA; font-size: 13px; margin-bottom: 16px;">
+          Pay via Google Pay, PhonePe, Paytm, BHIM, UPI QR, Cards &amp; Netbanking
         </div>
 
-        <!-- Mobile UPI Intent Deep Link -->
-        <a id="btn-upi-intent" href="{% if cf_session and cf_session.get('links') and cf_session['links'].get('default') %}{{ cf_session['links']['default'] }}{% else %}upi://pay?pa={{ upi_vpa }}&pn={{ upi_name }}&am={{ '%.2f'|format(j['amount']) }}&cu=INR&tn=Job_{{ j['id'] }}{% endif %}" class="btn-upi-intent">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"></path></svg>
-          Pay with UPI App (Mobile)
-        </a>
+        <!-- Primary Cashfree Checkout Action -->
+        <button type="button" id="btn-cashfree-pay" onclick="triggerCashfreePayment()" style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 10px; background: linear-gradient(135deg, #10B981, #059669); color: #FFFFFF; font-size: 16px; font-weight: 700; padding: 15px 20px; border-radius: 10px; border: none; cursor: pointer; box-shadow: 0 4px 15px rgba(16, 185, 129, 0.35); transition: transform 0.15s ease, box-shadow 0.15s ease;">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"></path></svg>
+          Pay {{ cur }}<span id="btn-amount-text">{{ '%.2f'|format(j['amount']) }}</span> with Cashfree
+        </button>
 
-        {% if cf_session and cf_session.get('env') == 'production' and cf_session.get('links', {}).get('web') %}
-        <!-- Cashfree Hosted Checkout Button -->
-        <a id="btn-cf-checkout" href="{{ cf_session['links']['web'] }}" target="_blank" rel="noopener noreferrer" class="btn-secondary" style="display: flex; align-items: center; justify-content: center; gap: 8px; margin-top: 10px; padding: 12px 18px; font-size: 14px; text-decoration: none; border-color: rgba(141, 235, 181, 0.4); background: rgba(141, 235, 181, 0.08); color: #8DEBB5;">
-          ⚡ Pay via Cashfree Checkout (All UPI &amp; Cards) ↗
-        </a>
-        {% endif %}
+        <!-- Dynamic QR Code Card (Click to open Cashfree Dynamic QR) -->
+        <div onclick="triggerCashfreePayment()" style="cursor: pointer; margin-top: 14px; padding: 16px; border: 2px dashed rgba(16, 185, 129, 0.35); border-radius: 12px; background: rgba(16, 185, 129, 0.05); text-align: center; transition: all 0.2s ease;">
+          <div style="display: flex; align-items: center; justify-content: center; gap: 8px; margin-bottom: 6px;">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#10B981" stroke-width="2"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect><path d="M7 7h.01M17 7h.01M7 17h.01M17 17h.01"></path></svg>
+            <span style="font-weight: 700; color: #10B981; font-size: 14px;">Instant UPI QR &amp; App Checkout</span>
+          </div>
+          <p style="margin: 0 0 8px; font-size: 12px; color: var(--text-muted);">Point your mobile camera or GPay / PhonePe / Paytm to scan, or pay directly via app</p>
+          <span style="display: inline-block; font-size: 12px; font-weight: 600; color: #10B981; background: rgba(16, 185, 129, 0.18); padding: 5px 14px; border-radius: 20px;">
+            Click to Open Cashfree Checkout ↗
+          </span>
+        </div>
 
-        {% if cf_session and cf_session.get('env') == 'sandbox' %}
+        {% if cf_session.get('env') == 'sandbox' %}
         <!-- Cashfree Sandbox Simulator Button -->
         <div id="cf-simulator-box" style="background: rgba(139, 92, 246, 0.12); border: 1px dashed #A78BFA; border-radius: 8px; padding: 12px; margin-top: 14px; text-align: center;">
           <div style="font-size: 11px; color: #C4B5FD; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;">🧪 Cashfree Test Mode Active</div>
           <div style="font-size: 12px; color: var(--text-muted); margin: 4px 0 10px;">Zero money deducted. Click below to simulate UPI payment:</div>
-          <a id="btn-cf-simulator" href="{{ cf_session.get('links', {}).get('web') or cf_session.get('links', {}).get('default') or '#' }}" target="_blank" rel="noopener noreferrer" class="btn-secondary" style="display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 8px 16px; font-size: 13px; color: #FFFFFF; border-color: #8B5CF6; background: rgba(139, 92, 246, 0.2);">
+          <button type="button" onclick="triggerCashfreePayment()" class="btn-secondary" style="display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 8px 16px; font-size: 13px; color: #FFFFFF; border-color: #8B5CF6; background: rgba(139, 92, 246, 0.2); cursor: pointer;">
             Open Cashfree Simulator ↗
-          </a>
+          </button>
         </div>
         {% endif %}
 
+        <!-- Fallback Direct Paytm UPI (Collapsible) -->
+        <details style="margin-top: 20px; border-top: 1px dashed rgba(255,255,255,0.1); padding-top: 12px; text-align: left; font-size: 13px;">
+          <summary style="cursor: pointer; color: var(--text-muted); font-weight: 600; outline: none; user-select: none;">
+            Manual Offline Fallback (Direct Paytm UPI)
+          </summary>
+          <div style="margin-top: 12px; text-align: center; background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; padding: 14px;">
+            <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 8px;">Direct VPA: <code>{{ upi_vpa }}</code></div>
+            <div id="qrcode-fallback-container" style="display: flex; justify-content: center; margin-bottom: 10px;"></div>
+            <a id="btn-fallback-upi" href="upi://pay?pa={{ upi_vpa }}&pn={{ upi_name }}&am={{ '%.2f'|format(j['amount']) }}&cu=INR&tn=Job_{{ j['id'] }}" class="btn-secondary" style="font-size: 12px; padding: 6px 12px; display: inline-flex;">
+              Open in Paytm / UPI App
+            </a>
+          </div>
+        </details>
+
+        {% else %}
+        <!-- Standalone Direct UPI Mode (Paytm fallback when Cashfree not configured) -->
+        <div class="upi-badge">⚡ Direct UPI Mode (Paytm)</div>
+        <div class="upi-amount-hero" id="hero-amount">{{ cur }}{{ '%.2f'|format(j['amount']) }}</div>
+        <div class="upi-paise-note">Direct UPI: {{ upi_vpa }}</div>
+        <div class="upi-qr-box" id="qrcode-container"></div>
+        <a id="btn-upi-intent" href="upi://pay?pa={{ upi_vpa }}&pn={{ upi_name }}&am={{ '%.2f'|format(j['amount']) }}&cu=INR&tn=Job_{{ j['id'] }}" class="btn-upi-intent">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"></path></svg>
+          Pay with UPI App (Mobile)
+        </a>
+        {% endif %}
+
         <!-- Live Listener Status Pulse -->
-        <div class="pulse-container" id="status-container">
+        <div class="pulse-container" id="status-container" style="margin-top: 18px;">
           <div class="pulse-dot"></div>
           <span id="status-label">{% if cf_session %}Listening for instant Cashfree payment...{% else %}Listening for bank SMS confirmation...{% endif %}</span>
         </div>
@@ -2857,25 +2925,53 @@ def job(job_id):
         const upiName = "{{ upi_name }}";
         let currentAmount = "{{ '%.2f'|format(j['amount']) }}";
         const currencySymbol = "{{ cur }}";
-        let qrCodeInstance = null;
+        let cashfreeSessionId = "{{ cf_session['session_id'] if cf_session else '' }}";
+        let cfEnv = "{{ cf_session.get('env', 'production') if cf_session else 'production' }}";
 
-        function getUpiUri(amt) {
-          return `upi://pay?pa=${encodeURIComponent(upiVpa)}&pn=${encodeURIComponent(upiName)}&am=${amt}&cu=INR&tn=Job_${jobId}`;
+        // Cashfree Payment Trigger (Modal on Desktop, Full Viewport on Mobile)
+        function triggerCashfreePayment() {
+          if (!cashfreeSessionId) {
+            alert("Cashfree session is being prepared or unavailable. Please wait or refresh the page.");
+            return;
+          }
+          if (typeof Cashfree === "undefined") {
+            alert("Payment SDK is loading, please try again in a few seconds.");
+            return;
+          }
+          try {
+            const isMobile = /Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+            const redirectTarget = isMobile ? "_self" : "_modal";
+            const cashfree = Cashfree({ mode: cfEnv });
+            cashfree.checkout({
+              paymentSessionId: cashfreeSessionId,
+              redirectTarget: redirectTarget
+            }).then(function(result) {
+              if (result && result.error) {
+                console.warn("Cashfree checkout error / closed:", result.error.message);
+              }
+              if (result && result.redirect) {
+                console.log("Cashfree redirecting...");
+              }
+            });
+          } catch (e) {
+            console.error("Cashfree Checkout Error:", e);
+            alert("Failed to open checkout: " + e.message);
+          }
         }
 
-        function renderQrCode(amt) {
-          const container = document.getElementById('qrcode-container');
+        // Fallback or Standalone Paytm QR Rendering
+        function renderFallbackQr(amt) {
+          const container = document.getElementById('qrcode-fallback-container') || document.getElementById('qrcode-container');
           if (!container) return;
           container.innerHTML = '';
-          const uri = getUpiUri(amt);
-          const intentBtn = document.getElementById('btn-upi-intent');
-          if (intentBtn) intentBtn.href = uri;
-          
+          const uri = `upi://pay?pa=${encodeURIComponent(upiVpa)}&pn=${encodeURIComponent(upiName)}&am=${amt}&cu=INR&tn=Job_${jobId}`;
+          const fallbackBtn = document.getElementById('btn-fallback-upi') || document.getElementById('btn-upi-intent');
+          if (fallbackBtn) fallbackBtn.href = uri;
           try {
-            qrCodeInstance = new QRCode(container, {
+            new QRCode(container, {
               text: uri,
-              width: 170,
-              height: 170,
+              width: 150,
+              height: 150,
               colorDark: "#000000",
               colorLight: "#ffffff",
               correctLevel: QRCode.CorrectLevel.M
@@ -2885,9 +2981,9 @@ def job(job_id):
           }
         }
 
-        // Render QR on page load only if Cashfree dynamic QR not already present
-        if (!document.getElementById('cf-qr-img')) {
-          renderQrCode(currentAmount);
+        // Render QR on page load if direct mode or fallback element exists
+        if (document.getElementById('qrcode-container') || document.getElementById('qrcode-fallback-container')) {
+          renderFallbackQr(currentAmount);
         }
 
         // Real-Time Payment Polling (Every 2 seconds)
@@ -2981,25 +3077,19 @@ def job(job_id):
               currentAmount = data.amount.toFixed(2);
               document.getElementById('display-rate').textContent = currencySymbol + data.rate.toFixed(1) + ' / page';
               document.getElementById('display-total').textContent = currencySymbol + currentAmount;
-              document.getElementById('hero-amount').textContent = currencySymbol + currentAmount;
+              const heroAmt = document.getElementById('hero-amount');
+              if (heroAmt) heroAmt.textContent = currencySymbol + currentAmount;
+              const btnAmt = document.getElementById('btn-amount-text');
+              if (btnAmt) btnAmt.textContent = currentAmount;
 
-              if (data.cf_qr) {
-                const qrContainer = document.getElementById('qrcode-container');
-                if (qrContainer) {
-                  qrContainer.innerHTML = `<img id="cf-qr-img" src="${data.cf_qr}" alt="Cashfree UPI QR" style="width: 170px; height: 170px; display: block; border-radius: 8px;">`;
-                }
-              } else {
-                renderQrCode(currentAmount);
+              if (data.cf_session_id) {
+                cashfreeSessionId = data.cf_session_id;
+              }
+              if (data.cf_env) {
+                cfEnv = data.cf_env;
               }
 
-              if (data.cf_simulator) {
-                const simBtn = document.getElementById('btn-cf-simulator');
-                if (simBtn) simBtn.href = data.cf_simulator;
-              }
-              if (data.cf_intent) {
-                const intentBtn = document.getElementById('btn-upi-intent');
-                if (intentBtn) intentBtn.href = data.cf_intent;
-              }
+              renderFallbackQr(currentAmount);
             }
           } catch (err) {
             console.error("Update error:", err);
@@ -3257,11 +3347,14 @@ def update_options(job_id):
     # If Cashfree is configured, also fetch new Cashfree session data for the updated amount
     cf_data = {}
     if cashfree_helper.is_cashfree_configured():
-        base_url = request.host_url.rstrip("/")
+        base_url = get_public_base_url()
         notify_url = f"{base_url}/api/cashfree/webhook"
-        sess = cashfree_helper.get_or_create_cashfree_session(job_id, new_amount, notify_url=notify_url)
+        return_url = f"{base_url}/job/{job_id}?cf_order_id={{order_id}}"
+        sess = cashfree_helper.get_or_create_cashfree_session(job_id, new_amount, notify_url=notify_url, return_url=return_url)
         if sess:
             cf_data = {
+                "cf_session_id": sess.get("session_id"),
+                "cf_env": sess.get("env", "production"),
                 "cf_qr": sess.get("qr_data"),
                 "cf_simulator": sess.get("links", {}).get("web") or sess.get("links", {}).get("default"),
                 "cf_intent": sess.get("links", {}).get("default")

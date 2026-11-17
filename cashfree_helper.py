@@ -105,7 +105,8 @@ def create_order(
     phone: str = "9999999999",
     customer_name: str = "Guest",
     customer_id: Optional[str] = None,
-    notify_url: Optional[str] = None
+    notify_url: Optional[str] = None,
+    return_url: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Creates an order on Cashfree to obtain payment_session_id.
@@ -121,8 +122,13 @@ def create_order(
             "customer_name": customer_name
         }
     }
+    order_meta = {}
     if notify_url:
-        payload["order_meta"] = {"notify_url": notify_url}
+        order_meta["notify_url"] = notify_url
+    if return_url:
+        order_meta["return_url"] = return_url
+    if order_meta:
+        payload["order_meta"] = order_meta
 
     return _request("orders", method="POST", data=payload)
 
@@ -203,7 +209,7 @@ def verify_webhook_signature(timestamp: str, raw_body: str, signature: str) -> b
 _SESSION_CACHE: Dict[str, Dict[str, Any]] = {}
 
 
-def get_or_create_cashfree_session(job_id: str, amount: float, notify_url: Optional[str] = None) -> Optional[Dict[str, Any]]:
+def get_or_create_cashfree_session(job_id: str, amount: float, notify_url: Optional[str] = None, return_url: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """
     Creates or retrieves an existing Cashfree session for a job and returns QR code and links.
     """
@@ -218,12 +224,12 @@ def get_or_create_cashfree_session(job_id: str, amount: float, notify_url: Optio
         cache_key = f"{job_id}_{amount_cents}"
         if cache_key in _SESSION_CACHE:
             cached = _SESSION_CACHE[cache_key]
-            if cached.get("qr_data"):
+            if cached.get("session_id"):
                 return cached
 
         session_id = None
         try:
-            order_res = create_order(order_id, clean_amount, notify_url=notify_url)
+            order_res = create_order(order_id, clean_amount, notify_url=notify_url, return_url=return_url)
             session_id = order_res.get("payment_session_id")
         except RuntimeError as e:
             err_str = str(e).lower()
@@ -253,12 +259,6 @@ def get_or_create_cashfree_session(job_id: str, amount: float, notify_url: Optio
                 links = link_res["data"].get("payload", {})
         except Exception as e:
             print(f"[WARN] Could not fetch Cashfree links: {e}")
-
-        if not links.get("web") and session_id:
-            hosted_link = f"https://payments.cashfree.com/order/#{session_id}"
-            links["web"] = hosted_link
-            if not links.get("default"):
-                links["default"] = hosted_link
 
         cfg = get_config()
         session_info = {
