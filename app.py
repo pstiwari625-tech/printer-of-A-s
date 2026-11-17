@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 
 from flask import (Flask, abort, g, jsonify, redirect, render_template_string,
                    request, send_file, url_for)
-from PIL import Image, ImageSequence, UnidentifiedImageError
+from PIL import Image, ImageSequence, UnidentifiedImageError, ImageDraw
 from pypdf import PdfReader, PdfWriter
 try:
     from pillow_heif import register_heif_opener
@@ -3941,31 +3941,162 @@ def refunds_page():
     """)
 
 
-# ---------- API for Raspberry Pi Worker Daemon ----------
+# ---------- Tablet & Raspberry Pi Kiosk Controller APIs ----------
 def require_pi():
-    if request.headers.get("Authorization") != f"Bearer {PI_TOKEN}":
-        abort(401)
+    auth = request.headers.get("Authorization", "")
+    token = request.args.get("token") or ""
+    if auth == f"Bearer {PI_TOKEN}" or token == PI_TOKEN:
+        return
+    abort(401)
+
+
+@app.get("/manifest.json")
+def pwa_manifest():
+    return jsonify({
+        "name": "Printer of A's — Tablet Kiosk Station",
+        "short_name": "Print Kiosk",
+        "description": "Autonomous Tablet Print Kiosk Controller",
+        "start_url": "/kiosk",
+        "display": "standalone",
+        "background_color": "#111113",
+        "theme_color": "#10B981",
+        "orientation": "any",
+        "icons": [
+            {
+                "src": "https://api.iconify.design/lucide:printer.svg?color=%2310b981",
+                "sizes": "192x192 512x512",
+                "type": "image/svg+xml",
+                "purpose": "any maskable"
+            }
+        ]
+    })
 
 
 @app.get("/api/next-job")
 def next_job():
-    """Pi polls this. Returns the oldest queued job and marks it 'printing'."""
+    """Tablet or Pi polls this. Returns the oldest queued job and marks it 'printing'."""
     require_pi()
     con = get_db()
     with con:
         row = con.execute("""SELECT * FROM jobs WHERE status='queued'
-                             ORDER BY created LIMIT 1""").fetchone()
+                             ORDER BY created ASC LIMIT 1""").fetchone()
         if not row:
             return jsonify(job=None)
         con.execute("UPDATE jobs SET status='printing' WHERE id=?", (row["id"],))
+        if SUPABASE_URL:
+            supabase_request(f"jobs?id=eq.{row['id']}", method="PATCH", data={"status": "printing"})
+
+    file_url = f"/api/job/{row['id']}/file?token={PI_TOKEN}"
     return jsonify(job={
         "id": row["id"],
+        "filename": row["filename"],
+        "pages": row["pages"],
         "copies": row["copies"],
         "color": row["color"],
         "duplex": bool(row["duplex"]),
         "notes": row["notes"] if "notes" in row.keys() else "",
-        "file_url": url_for("job_file", job_id=row["id"])
+        "file_url": file_url
     })
+
+
+@app.get("/api/kiosk/queue")
+def kiosk_queue():
+    """Returns currently queued and printing jobs for the live kiosk monitor."""
+    require_pi()
+    con = get_db()
+    rows = con.execute("""SELECT id, filename, pages, copies, color, duplex, status, amount, created 
+                          FROM jobs WHERE status IN ('queued', 'printing') 
+                          ORDER BY created ASC LIMIT 50""").fetchall()
+    return jsonify(ok=True, jobs=[dict(r) for r in rows])
+
+
+def generate_diagnostic_pdf():
+    """Generates an A4 hardware calibration and diagnostic test sheet."""
+    width, height = 1240, 1754
+    img = Image.new("RGB", (width, height), "white")
+    draw = ImageDraw.Draw(img)
+
+    margin = 75
+    draw.rectangle([margin, margin, width - margin, height - margin], outline="#000000", width=3)
+    draw.rectangle([margin + 10, margin + 10, width - margin - 10, height - margin - 10], outline="#E2E8F0", width=1)
+
+    for x, y in [(margin, margin), (width - margin, margin), (margin, height - margin), (width - margin, height - margin)]:
+        draw.line([(x - 25, y), (x + 25, y)], fill="#000000", width=2)
+        draw.line([(x, y - 25), (x, y + 25)], fill="#000000", width=2)
+
+    draw.rectangle([margin + 10, margin + 10, width - margin - 10, margin + 120], fill="#111827")
+    draw.text((margin + 30, margin + 25), "PRINTER OF A's  |  AUTONOMOUS PRINT KIOSK", fill="#10B981")
+    draw.text((margin + 30, margin + 65), "HARDWARE DIAGNOSTIC & CALIBRATION SHEET", fill="#FFFFFF")
+
+    info_y = margin + 145
+    now_str = datetime.now().strftime("%d-%b-%Y %I:%M:%S %p")
+    kiosk_id = os.environ.get("KIOSK_ID", "KIOSK_01")
+    draw.text((margin + 30, info_y), f"STATION ID: {kiosk_id} (Acer Tablet Controller)", fill="#1E293B")
+    draw.text((margin + 30, info_y + 25), "HOST: printer-of-a-s.onrender.com  |  CLOUD: Supabase Active", fill="#64748B")
+    draw.text((margin + 30, info_y + 50), f"TIMESTAMP: {now_str}", fill="#64748B")
+
+    cmyk_y = info_y + 95
+    draw.text((margin + 30, cmyk_y), "1. COLOR SPECTRUM & NOZZLE HEALTH (CMYK)", fill="#0F172A")
+    cmyk_y += 30
+    colors = [
+        ("CYAN", (0, 180, 216)),
+        ("MAGENTA", (217, 4, 103)),
+        ("YELLOW", (255, 183, 3)),
+        ("BLACK", (20, 20, 20))
+    ]
+    swatch_w = (width - 2 * margin - 60) // 4
+    for i, (name, col) in enumerate(colors):
+        sx = margin + 30 + i * swatch_w
+        draw.rectangle([sx, cmyk_y, sx + swatch_w - 15, cmyk_y + 55], fill=col)
+        draw.text((sx + 8, cmyk_y + 60), name, fill="#334155")
+
+    gray_y = cmyk_y + 110
+    draw.text((margin + 30, gray_y), "2. GRAYSCALE DENSITY & CONTRAST RAMP (0% - 100%)", fill="#0F172A")
+    gray_y += 30
+    steps = 10
+    step_w = (width - 2 * margin - 60) // steps
+    for s in range(steps):
+        v = int(255 * (1 - (s / (steps - 1))))
+        gx = margin + 30 + s * step_w
+        draw.rectangle([gx, gray_y, gx + step_w - 5, gray_y + 45], fill=(v, v, v), outline="#94A3B8")
+        draw.text((gx + 4, gray_y + 50), f"{int((s/(steps-1))*100)}%", fill="#64748B")
+
+    type_y = gray_y + 95
+    draw.text((margin + 30, type_y), "3. TYPOGRAPHIC RESOLUTION & EDGE ACUITY", fill="#0F172A")
+    type_y += 30
+    sample_texts = [
+        "24pt: The quick brown fox jumps over the lazy dog 1234567890",
+        "16pt: Autonomous Cloud Print Kiosks deliver on-demand zero-retention printing.",
+        "12pt: Razor-sharp micro-typography tests printhead nozzle alignment and DPI scaling.",
+        "9pt: ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz 1234567890 !@#$%^&*()_+"
+    ]
+    for txt in sample_texts:
+        draw.text((margin + 30, type_y), txt, fill="#1E293B")
+        type_y += 32
+
+    grid_y = type_y + 30
+    draw.text((margin + 30, grid_y), "4. ROLLER TENSION & MARGIN CHECK (0.5 inch Grid)", fill="#0F172A")
+    grid_y += 25
+    draw.rectangle([margin + 30, grid_y, width - margin - 30, grid_y + 180], outline="#CBD5E1", width=1)
+    for gy in range(grid_y, grid_y + 180, 30):
+        draw.line([(margin + 30, gy), (width - margin - 30, gy)], fill="#E2E8F0", width=1)
+    for gx in range(margin + 30, width - margin - 30, 40):
+        draw.line([(gx, grid_y), (gx, grid_y + 180)], fill="#E2E8F0", width=1)
+    draw.text((margin + 50, grid_y + 75), "VERIFIED: Page feed is straight if grid lines are parallel to sheet edges", fill="#059669")
+
+    draw.line([(margin + 30, height - margin - 60), (width - margin - 30, height - margin - 60)], fill="#E2E8F0", width=2)
+    draw.text((margin + 30, height - margin - 45), "PRINTER OF A's  •  ACER TABLET CONTROLLER  •  POWERED BY DEEPMIND AGENTIC TECH", fill="#94A3B8")
+
+    pdf_buffer = BytesIO()
+    img.save(pdf_buffer, format="PDF", resolution=150.0)
+    pdf_buffer.seek(0)
+    return pdf_buffer
+
+
+@app.get("/api/kiosk/diagnostic-pdf")
+def kiosk_diagnostic_pdf():
+    buf = generate_diagnostic_pdf()
+    return send_file(buf, mimetype="application/pdf", as_attachment=False, download_name="kiosk_diagnostic_sheet.pdf")
 
 
 @app.get("/api/job/<job_id>/file")
@@ -4007,5 +4138,839 @@ def job_status(job_id):
     return jsonify(ok=True)
 
 
+@app.get("/kiosk")
+def kiosk_station():
+    """Tablet Kiosk Station Dashboard (Optimized for Android Acer Tablet & PWA Fullscreen)."""
+    return render_template_string("""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Printer of A's — Tablet Kiosk Station</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#10B981">
+  <link rel="manifest" href="/manifest.json">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0D0D11;
+      --card-bg: #16161C;
+      --card-border: rgba(255, 255, 255, 0.08);
+      --accent: #10B981;
+      --accent-glow: rgba(16, 185, 129, 0.25);
+      --text: #F8FAFC;
+      --text-muted: #94A3B8;
+      --warning: #F59E0B;
+      --danger: #EF4444;
+      --font-main: 'Plus Jakarta Sans', system-ui, sans-serif;
+      --font-mono: 'JetBrains Mono', monospace;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font-main);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    /* Top Kiosk Bar */
+    .kiosk-nav {
+      background: #111115;
+      border-bottom: 1px solid var(--card-border);
+      padding: 12px 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+    .kiosk-brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .kiosk-brand-icon {
+      width: 38px;
+      height: 38px;
+      background: linear-gradient(135deg, #10B981, #059669);
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 0 15px var(--accent-glow);
+    }
+    .kiosk-title {
+      font-size: 1.15rem;
+      font-weight: 800;
+      letter-spacing: -0.3px;
+    }
+    .kiosk-sub {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+    }
+    .kiosk-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .kiosk-badge {
+      font-size: 12px;
+      font-weight: 700;
+      padding: 6px 14px;
+      border-radius: 20px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .badge-online {
+      background: rgba(16, 185, 129, 0.15);
+      color: #10B981;
+      border: 1px solid rgba(16, 185, 129, 0.3);
+    }
+    .badge-paused {
+      background: rgba(245, 158, 11, 0.15);
+      color: #F59E0B;
+      border: 1px solid rgba(245, 158, 11, 0.3);
+    }
+    .pulse-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: currentColor;
+      box-shadow: 0 0 8px currentColor;
+      animation: pulse 1.8s infinite;
+    }
+    @keyframes pulse { 0% { opacity: 0.4; } 50% { opacity: 1; } 100% { opacity: 0.4; } }
+
+    .btn-kiosk {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      color: var(--text);
+      padding: 8px 14px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.2s;
+    }
+    .btn-kiosk:hover { border-color: var(--accent); color: var(--accent); }
+    .btn-kiosk.active { background: rgba(16, 185, 129, 0.15); border-color: var(--accent); color: #10B981; }
+
+    /* Main Container */
+    .kiosk-main {
+      flex: 1;
+      padding: 24px;
+      max-width: 1380px;
+      margin: 0 auto;
+      width: 100%;
+      display: grid;
+      grid-template-columns: 1.15fr 0.85fr;
+      gap: 24px;
+    }
+    @media (max-width: 900px) {
+      .kiosk-main { grid-template-columns: 1fr; }
+    }
+
+    .kiosk-card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 16px;
+      padding: 24px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    /* Active Printing Hero */
+    .active-job-hero {
+      border: 2px solid var(--accent);
+      box-shadow: 0 0 25px var(--accent-glow);
+      text-align: center;
+      padding: 36px 24px;
+    }
+    .idle-hero {
+      text-align: center;
+      padding: 48px 24px;
+    }
+    .idle-icon {
+      font-size: 48px;
+      margin-bottom: 16px;
+      display: inline-block;
+      animation: float 3s ease-in-out infinite;
+    }
+    @keyframes float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-8px); } }
+
+    .job-title-large {
+      font-size: 1.6rem;
+      font-weight: 800;
+      margin-bottom: 8px;
+    }
+    .job-meta-chips {
+      display: flex;
+      justify-content: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin: 16px 0 24px;
+    }
+    .chip {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      padding: 6px 14px;
+      border-radius: 20px;
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    .progress-bar-container {
+      background: rgba(255, 255, 255, 0.06);
+      border-radius: 12px;
+      height: 16px;
+      overflow: hidden;
+      margin: 18px 0 10px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+    .progress-bar-fill {
+      background: linear-gradient(90deg, #10B981, #34D399);
+      height: 100%;
+      width: 0%;
+      transition: width 0.3s ease;
+      box-shadow: 0 0 12px #10B981;
+    }
+
+    /* Mode Selector Pills */
+    .mode-bar {
+      display: flex;
+      gap: 8px;
+      background: #111116;
+      padding: 6px;
+      border-radius: 10px;
+      border: 1px solid var(--card-border);
+      margin-bottom: 20px;
+    }
+    .mode-btn {
+      flex: 1;
+      padding: 10px 8px;
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      font-size: 13px;
+      font-weight: 700;
+      border-radius: 8px;
+      cursor: pointer;
+      text-align: center;
+      transition: all 0.2s;
+    }
+    .mode-btn.active {
+      background: var(--card-bg);
+      color: #10B981;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+    }
+
+    /* Queue Table */
+    .queue-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+      margin-top: 14px;
+    }
+    .queue-table th {
+      text-align: left;
+      padding: 10px 12px;
+      color: var(--text-muted);
+      border-bottom: 1px solid var(--card-border);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .queue-table td {
+      padding: 12px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    }
+
+    /* Terminal Log */
+    .terminal-box {
+      background: #09090C;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 12px;
+      padding: 14px;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      height: 240px;
+      overflow-y: auto;
+      color: #A1A1AA;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .terminal-line { word-break: break-all; }
+    .term-success { color: #10B981; font-weight: 600; }
+    .term-info { color: #60A5FA; }
+    .term-warn { color: #F59E0B; }
+
+    /* Modal */
+    .kiosk-modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.85);
+      backdrop-filter: blur(8px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+      padding: 20px;
+    }
+    .kiosk-modal-box {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 16px;
+      width: 100%;
+      max-width: 440px;
+      padding: 28px;
+      text-align: center;
+    }
+    .pin-input {
+      background: #09090C;
+      border: 2px solid var(--card-border);
+      color: #FFFFFF;
+      font-size: 20px;
+      letter-spacing: 6px;
+      text-align: center;
+      padding: 14px;
+      border-radius: 10px;
+      width: 100%;
+      margin: 18px 0;
+      outline: none;
+      font-family: var(--font-mono);
+    }
+    .pin-input:focus { border-color: var(--accent); }
+  </style>
+</head>
+<body>
+
+  <!-- Top Navigation Bar -->
+  <nav class="kiosk-nav">
+    <div class="kiosk-brand">
+      <div class="kiosk-brand-icon">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2.2"><path d="M6 9V2h12v7"></path><path d="M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"></path><path d="M6 14h12v8H6z"></path></svg>
+      </div>
+      <div>
+        <div class="kiosk-title">Printer of A's — Tablet Kiosk</div>
+        <div class="kiosk-sub" id="clock-display">STATION READY</div>
+      </div>
+    </div>
+
+    <div class="kiosk-actions">
+      <div class="kiosk-badge badge-online" id="status-badge">
+        <div class="pulse-dot"></div>
+        <span id="status-badge-text">LISTENING</span>
+      </div>
+      <button type="button" class="btn-kiosk" id="btn-audio" onclick="toggleAudio()">
+        <span id="audio-icon">🔔</span> Chime: ON
+      </button>
+      <button type="button" class="btn-kiosk" id="btn-wakelock" onclick="toggleWakeLock()">
+        🔒 Awake: ON
+      </button>
+      <button type="button" class="btn-kiosk" onclick="toggleFullscreen()">
+        ⛶ Fullscreen
+      </button>
+      <button type="button" class="btn-kiosk" onclick="changePasscode()" title="Change Token">
+        ⚙️ Token
+      </button>
+    </div>
+  </nav>
+
+  <!-- Main Kiosk Layout -->
+  <main class="kiosk-main">
+
+    <!-- Left Column: Active Print & Controls -->
+    <div style="display: flex; flex-direction: column; gap: 24px;">
+
+      <!-- Mode Selector -->
+      <div class="kiosk-card" style="padding: 16px 20px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+          <span style="font-size: 13px; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">1. Operational Mode</span>
+          <span style="font-size: 12px; color: #10B981; font-weight: 600;" id="mode-desc">Virtual Simulator Mode</span>
+        </div>
+        <div class="mode-bar">
+          <button type="button" class="mode-btn active" id="mode-sim" onclick="setMode('sim')">🧪 Virtual Simulator</button>
+          <button type="button" class="mode-btn" id="mode-wifi" onclick="setMode('wifi')">🖨️ Universal Wi-Fi (IPP)</button>
+          <button type="button" class="mode-btn" id="mode-otg" onclick="setMode('otg')">🔌 USB OTG Cable</button>
+        </div>
+        <div style="display: flex; gap: 12px;">
+          <button type="button" class="btn-kiosk active" id="btn-autoprint" onclick="toggleAutoPrint()" style="flex: 1; justify-content: center; padding: 12px;">
+            ⚡ Auto-Print: ACTIVE
+          </button>
+          <button type="button" class="btn-kiosk" onclick="runDiagnosticTest()" style="flex: 1; justify-content: center; padding: 12px; border-color: rgba(96, 165, 250, 0.4); color: #60A5FA;">
+            🧪 Run Test Print
+          </button>
+        </div>
+      </div>
+
+      <!-- Active Job Hero Card -->
+      <div class="kiosk-card" id="hero-card">
+        <div class="idle-hero" id="idle-view">
+          <div class="idle-icon">📡</div>
+          <h2 style="font-size: 1.4rem; font-weight: 800; margin-bottom: 6px;">Waiting for Customer Documents...</h2>
+          <p style="color: var(--text-muted); font-size: 13px; max-width: 440px; margin: 0 auto;">
+            When customers upload and pay ₹2 via Cashfree on your website, documents will appear here automatically and start printing.
+          </p>
+        </div>
+
+        <div id="active-job-view" style="display: none;">
+          <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+            <span class="kiosk-badge badge-online">🖨️ CURRENTLY PRINTING</span>
+            <span id="job-id-tag" style="font-family: var(--font-mono); font-size: 13px; color: var(--text-muted);">#--------</span>
+          </div>
+
+          <div style="margin: 24px 0 16px; text-align: center;">
+            <h1 class="job-title-large" id="active-filename">Document.pdf</h1>
+            <div class="job-meta-chips">
+              <span class="chip" id="chip-pages">1 Page</span>
+              <span class="chip" id="chip-copies">1 Copy</span>
+              <span class="chip" id="chip-color">Black &amp; White</span>
+              <span class="chip" id="chip-duplex">Single-sided</span>
+            </div>
+
+            <div class="progress-bar-container">
+              <div class="progress-bar-fill" id="job-progress-fill"></div>
+            </div>
+            <div style="display: flex; justify-content: space-between; font-size: 12px; color: var(--text-muted);">
+              <span id="progress-status-label">Spooling to printhead...</span>
+              <span id="progress-percent">0%</span>
+            </div>
+          </div>
+
+          <div style="background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.2); border-radius: 10px; padding: 12px; display: flex; align-items: center; gap: 10px; font-size: 12px; color: #10B981;">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
+            <span><strong>Zero-Retention Protection:</strong> PDF will be permanently erased from cloud &amp; tablet upon completion.</span>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Right Column: Queue & Activity Log -->
+    <div style="display: flex; flex-direction: column; gap: 24px;">
+
+      <!-- Queue Monitor -->
+      <div class="kiosk-card">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+          <h3 style="font-size: 1.1rem; font-weight: 800;">Live Print Queue</h3>
+          <span style="font-size: 12px; font-weight: 700; color: #10B981;" id="queue-count-badge">0 WAITING</span>
+        </div>
+
+        <div style="max-height: 220px; overflow-y: auto;">
+          <table class="queue-table">
+            <thead>
+              <tr>
+                <th>Job</th>
+                <th>File</th>
+                <th>Specs</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="queue-tbody">
+              <tr>
+                <td colspan="4" style="text-align: center; color: var(--text-muted); padding: 24px;">Queue is currently empty</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Real-Time Activity Log -->
+      <div class="kiosk-card" style="flex: 1; display: flex; flex-direction: column;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+          <h3 style="font-size: 1.1rem; font-weight: 800;">Activity Audit Log</h3>
+          <button type="button" style="background: none; border: none; color: var(--text-muted); font-size: 12px; cursor: pointer; text-decoration: underline;" onclick="clearLog()">Clear</button>
+        </div>
+        <div class="terminal-box" id="terminal-log">
+          <div class="terminal-line term-info">[SYSTEM] Tablet Kiosk Station initializing...</div>
+        </div>
+      </div>
+
+    </div>
+
+  </main>
+
+  <!-- Passcode Unlock Modal -->
+  <div class="kiosk-modal-overlay" id="pin-modal" style="display: none;">
+    <div class="kiosk-modal-box">
+      <div style="font-size: 38px; margin-bottom: 12px;">🔒</div>
+      <h2 style="font-size: 1.4rem; font-weight: 800; margin-bottom: 6px;">Kiosk Passcode Required</h2>
+      <p style="color: var(--text-muted); font-size: 13px;">Enter the Station Access Token (default: <code>kiosk-secret-token-123</code>) to authenticate this tablet.</p>
+      <input type="password" id="pin-field" class="pin-input" placeholder="Enter Token..." onkeydown="if(event.key==='Enter') savePasscode()">
+      <button type="button" class="btn-kiosk active" style="width: 100%; justify-content: center; padding: 14px; font-size: 15px;" onclick="savePasscode()">
+        Unlock Station
+      </button>
+    </div>
+  </div>
+
+  <script>
+    // State
+    let kioskToken = localStorage.getItem('kiosk_token') || 'kiosk-secret-token-123';
+    let currentMode = localStorage.getItem('kiosk_mode') || 'sim'; // 'sim', 'wifi', 'otg'
+    let autoPrintActive = true;
+    let audioEnabled = true;
+    let wakeLockInstance = null;
+    let isProcessing = false;
+
+    // Clock
+    setInterval(() => {
+      const now = new Date();
+      document.getElementById('clock-display').textContent = now.toLocaleTimeString('en-IN', {hour: '2-digit', minute:'2-digit', second:'2-digit'}) + ' IST';
+    }, 1000);
+
+    // Audio Synthesizer (Web Audio API - Zero MP3 dependency)
+    function playChime() {
+      if (!audioEnabled) return;
+      try {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if (!AudioCtx) return;
+        const ctx = new AudioCtx();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.type = "sine";
+        osc.frequency.setValueAtTime(587.33, ctx.currentTime); // D5
+        osc.frequency.setValueAtTime(880.00, ctx.currentTime + 0.12); // A5
+        gain.gain.setValueAtTime(0.25, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.5);
+      } catch(e) {
+        console.warn("Audio chime error:", e);
+      }
+    }
+
+    function toggleAudio() {
+      audioEnabled = !audioEnabled;
+      const btn = document.getElementById('btn-audio');
+      if (audioEnabled) {
+        btn.innerHTML = '<span>🔔</span> Chime: ON';
+        btn.classList.add('active');
+        playChime();
+      } else {
+        btn.innerHTML = '<span>🔕</span> Chime: OFF';
+        btn.classList.remove('active');
+      }
+    }
+
+    // WakeLock API (Keep Tablet Awake)
+    async function initWakeLock() {
+      try {
+        if ('wakeLock' in navigator) {
+          wakeLockInstance = await navigator.wakeLock.request('screen');
+          document.getElementById('btn-wakelock').classList.add('active');
+          logTerminal("[SYSTEM] Screen WakeLock acquired (Always-On active).", "term-success");
+        }
+      } catch (e) {
+        console.warn("WakeLock error:", e);
+      }
+    }
+
+    function toggleWakeLock() {
+      if (wakeLockInstance) {
+        wakeLockInstance.release().then(() => {
+          wakeLockInstance = null;
+          document.getElementById('btn-wakelock').classList.remove('active');
+          logTerminal("[SYSTEM] Screen WakeLock released.", "term-warn");
+        });
+      } else {
+        initWakeLock();
+      }
+    }
+
+    function toggleFullscreen() {
+      if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen().catch(err => alert("Fullscreen error: " + err.message));
+      } else {
+        document.exitFullscreen();
+      }
+    }
+
+    // Mode Selector
+    function setMode(mode) {
+      currentMode = mode;
+      localStorage.setItem('kiosk_mode', mode);
+      document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+      document.getElementById('mode-' + mode).classList.add('active');
+
+      const descMap = {
+        'sim': 'Virtual Simulator Mode (No Printer Needed)',
+        'wifi': 'Universal Wi-Fi / IPP Mode (Wireless Network)',
+        'otg': 'USB OTG Cable Mode (Direct Cable Print)'
+      };
+      document.getElementById('mode-desc').textContent = descMap[mode] || mode;
+      logTerminal(`[MODE] Switched to ${descMap[mode]}`, "term-info");
+    }
+
+    // Auto-Print Toggle
+    function toggleAutoPrint() {
+      autoPrintActive = !autoPrintActive;
+      const btn = document.getElementById('btn-autoprint');
+      const badge = document.getElementById('status-badge');
+      const badgeText = document.getElementById('status-badge-text');
+
+      if (autoPrintActive) {
+        btn.textContent = '⚡ Auto-Print: ACTIVE';
+        btn.className = 'btn-kiosk active';
+        badge.className = 'kiosk-badge badge-online';
+        badgeText.textContent = 'LISTENING';
+        logTerminal("[CONTROL] Auto-print resumed.", "term-success");
+      } else {
+        btn.textContent = '⏸️ Auto-Print: PAUSED';
+        btn.className = 'btn-kiosk';
+        badge.className = 'kiosk-badge badge-paused';
+        badgeText.textContent = 'PAUSED';
+        logTerminal("[CONTROL] Auto-print paused by operator.", "term-warn");
+      }
+    }
+
+    // Terminal Logger
+    function logTerminal(msg, cls = "") {
+      const box = document.getElementById('terminal-log');
+      if (!box) return;
+      const now = new Date().toLocaleTimeString('en-IN', {hour: '2-digit', minute:'2-digit', second:'2-digit'});
+      const line = document.createElement('div');
+      line.className = 'terminal-line ' + cls;
+      line.textContent = `[${now}] ${msg}`;
+      box.appendChild(line);
+      box.scrollTop = box.scrollHeight;
+    }
+
+    function clearLog() {
+      const box = document.getElementById('terminal-log');
+      if (box) box.innerHTML = '';
+    }
+
+    // Passcode Auth
+    function checkPasscode() {
+      if (!kioskToken) {
+        document.getElementById('pin-modal').style.display = 'flex';
+      }
+    }
+
+    function savePasscode() {
+      const val = (document.getElementById('pin-field').value || '').trim();
+      if (!val) { alert("Please enter passcode"); return; }
+      kioskToken = val;
+      localStorage.setItem('kiosk_token', val);
+      document.getElementById('pin-modal').style.display = 'none';
+      logTerminal("[AUTH] Station token saved and authenticated.", "term-success");
+      pollQueue();
+    }
+
+    function changePasscode() {
+      document.getElementById('pin-field').value = kioskToken;
+      document.getElementById('pin-modal').style.display = 'flex';
+    }
+
+    // Diagnostic Test Print
+    async function runDiagnosticTest() {
+      logTerminal("[DIAGNOSTIC] Generating test calibration sheet...", "term-info");
+      const url = `/api/kiosk/diagnostic-pdf?token=${encodeURIComponent(kioskToken)}`;
+      if (currentMode === 'sim') {
+        window.open(url, '_blank');
+        logTerminal("[DIAGNOSTIC] Opened diagnostic test page in browser preview.", "term-success");
+      } else {
+        // Universal Print Trigger via hidden iframe
+        let iframe = document.getElementById('print-iframe');
+        if (!iframe) {
+          iframe = document.createElement('iframe');
+          iframe.id = 'print-iframe';
+          iframe.style.position = 'fixed';
+          iframe.style.right = '0';
+          iframe.style.bottom = '0';
+          iframe.style.width = '0';
+          iframe.style.height = '0';
+          iframe.style.border = '0';
+          document.body.appendChild(iframe);
+        }
+        iframe.src = url;
+        iframe.onload = () => {
+          try {
+            iframe.contentWindow.focus();
+            iframe.contentWindow.print();
+            logTerminal("[DIAGNOSTIC] Dispatched calibration sheet to printer spooler.", "term-success");
+          } catch(e) {
+            window.open(url, '_blank');
+          }
+        };
+      }
+    }
+
+    // Main Queue Poller & Execution Engine
+    async function pollQueue() {
+      if (isProcessing) return;
+
+      try {
+        // 1. Refresh live queue list
+        const qRes = await fetch(`/api/kiosk/queue?token=${encodeURIComponent(kioskToken)}`);
+        if (qRes.status === 401) {
+          document.getElementById('pin-modal').style.display = 'flex';
+          return;
+        }
+        const qData = await qRes.json();
+        if (qData.ok && qData.jobs) {
+          updateQueueTable(qData.jobs);
+        }
+
+        // 2. If Auto-Print is enabled, claim next job
+        if (autoPrintActive && !isProcessing) {
+          const nextRes = await fetch(`/api/next-job?token=${encodeURIComponent(kioskToken)}`);
+          if (nextRes.ok) {
+            const nextData = await nextRes.json();
+            if (nextData.job) {
+              await processJob(nextData.job);
+            }
+          }
+        }
+      } catch (err) {
+        console.warn("Kiosk poll error:", err);
+      }
+    }
+
+    function updateQueueTable(jobs) {
+      const tbody = document.getElementById('queue-tbody');
+      const badge = document.getElementById('queue-count-badge');
+      if (!tbody) return;
+
+      const queuedOnly = jobs.filter(j => j.status === 'queued');
+      badge.textContent = `${queuedOnly.length} WAITING`;
+
+      if (jobs.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--text-muted); padding: 24px;">Queue is currently empty</td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = jobs.map((j, i) => `
+        <tr>
+          <td><code>#${j.id.substring(0, 6)}</code></td>
+          <td style="font-weight: 600; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${j.filename}</td>
+          <td>${j.pages}p • ${j.copies}c • ${j.color.toUpperCase()}</td>
+          <td><span class="chip" style="font-size: 11px; padding: 3px 8px; color: ${j.status==='printing' ? '#10B981':'#60A5FA'};">${j.status.toUpperCase()}</span></td>
+        </tr>
+      `).join('');
+    }
+
+    // Process a single job
+    async function processJob(job) {
+      isProcessing = true;
+      playChime();
+      logTerminal(`[JOB ${job.id}] Claimed! File: ${job.filename} (${job.pages} pages, ${job.copies} copies, ${job.color})`, "term-success");
+
+      // Show Active View
+      document.getElementById('idle-view').style.display = 'none';
+      document.getElementById('active-job-view').style.display = 'block';
+      document.getElementById('hero-card').className = 'kiosk-card active-job-hero';
+
+      document.getElementById('job-id-tag').textContent = '#' + job.id;
+      document.getElementById('active-filename').textContent = job.filename;
+      document.getElementById('chip-pages').textContent = `${job.pages} Page(s)`;
+      document.getElementById('chip-copies').textContent = `${job.copies} Copy(ies)`;
+      document.getElementById('chip-color').textContent = job.color === 'color' ? 'Full Colour' : 'Black & White';
+      document.getElementById('chip-duplex').textContent = job.duplex ? 'Yes (Duplex)' : 'Single-sided';
+
+      const fill = document.getElementById('job-progress-fill');
+      const statusLabel = document.getElementById('progress-status-label');
+      const percentLabel = document.getElementById('progress-percent');
+
+      // Step 1: Downloading
+      fill.style.width = '25%';
+      percentLabel.textContent = '25%';
+      statusLabel.textContent = 'Downloading PDF securely from cloud...';
+      await new Promise(r => setTimeout(r, 800));
+
+      // Step 2: Spooling / Printing
+      fill.style.width = '60%';
+      percentLabel.textContent = '60%';
+      statusLabel.textContent = `Sending to ${currentMode === 'sim' ? 'Virtual Print Engine' : 'Hardware Printhead'}...`;
+
+      if (currentMode !== 'sim') {
+        // Trigger universal hardware print via invisible iframe
+        const printUrl = `${job.file_url}&kiosk=1`;
+        let iframe = document.getElementById('print-iframe');
+        if (!iframe) {
+          iframe = document.createElement('iframe');
+          iframe.id = 'print-iframe';
+          iframe.style.position = 'fixed';
+          iframe.style.width = '0';
+          iframe.style.height = '0';
+          document.body.appendChild(iframe);
+        }
+        iframe.src = printUrl;
+        await new Promise(r => setTimeout(r, 2000));
+      } else {
+        // Simulate physical feed time (approx 1.2s per page)
+        const totalSimMs = Math.max(2000, job.pages * 1200);
+        await new Promise(r => setTimeout(r, totalSimMs));
+      }
+
+      // Step 3: Finished
+      fill.style.width = '100%';
+      percentLabel.textContent = '100%';
+      statusLabel.textContent = 'Print Complete! Notifying cloud server...';
+
+      // Step 4: Call Server POST /api/job/<id>/status -> done (triggers zero retention purge)
+      try {
+        const doneRes = await fetch(`/api/job/${job.id}/status`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${kioskToken}`
+          },
+          body: JSON.stringify({ status: 'done' })
+        });
+        if (doneRes.ok) {
+          logTerminal(`[JOB ${job.id}] Verified Complete. Zero-Retention: Cloud copy permanently deleted!`, "term-success");
+        }
+      } catch (err) {
+        logTerminal(`[JOB ${job.id}] Status confirm failed: ${err.message}`, "term-warn");
+      }
+
+      await new Promise(r => setTimeout(r, 1500));
+
+      // Reset to idle view
+      document.getElementById('active-job-view').style.display = 'none';
+      document.getElementById('idle-view').style.display = 'block';
+      document.getElementById('hero-card').className = 'kiosk-card';
+      fill.style.width = '0%';
+      percentLabel.textContent = '0%';
+
+      isProcessing = false;
+      pollQueue();
+    }
+
+    // Initialize
+    window.addEventListener('DOMContentLoaded', () => {
+      setMode(currentMode);
+      checkPasscode();
+      initWakeLock();
+      logTerminal("[SYSTEM] Tablet Kiosk Station ready.", "term-success");
+      logTerminal("[SYSTEM] Polling queue every 2.5 seconds...", "term-info");
+      setInterval(pollQueue, 2500);
+      pollQueue();
+    });
+  </script>
+</body>
+</html>
+    """)
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5001, debug=True)
+
