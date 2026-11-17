@@ -1538,6 +1538,257 @@ PAGE_TEMPLATE = """<!doctype html>
     .utr-input:focus {
       border-color: var(--accent);
     }
+
+    /* Site Footer Styling */
+    .site-footer {
+      border-top: 1px solid var(--border-subtle);
+      background: #0B0C0E;
+      padding: 56px 0 36px;
+      margin-top: 80px;
+      font-size: 13.5px;
+    }
+    .footer-container {
+      width: min(1200px, calc(100% - 48px));
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: 2fr 1fr 1fr 1.3fr;
+      gap: 40px;
+    }
+    @media (max-width: 820px) {
+      .footer-container {
+        grid-template-columns: 1fr;
+        gap: 28px;
+      }
+    }
+    .footer-brand-title {
+      font-size: 1.3rem;
+      font-weight: 800;
+      color: #FFFFFF;
+      margin-bottom: 8px;
+    }
+    .footer-brand-title span {
+      color: var(--accent);
+    }
+    .footer-tagline {
+      color: var(--text-muted);
+      font-size: 13px;
+      line-height: 1.5;
+      margin-bottom: 16px;
+      max-width: 340px;
+    }
+    .footer-contact-mini {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      font-size: 13px;
+      color: #CBD5E1;
+    }
+    .footer-contact-mini a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+    .footer-contact-mini a:hover {
+      text-decoration: underline;
+    }
+    .footer-heading {
+      color: #FFFFFF;
+      font-weight: 700;
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      margin-bottom: 14px;
+    }
+    .footer-nav-col {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .footer-nav-col a {
+      color: var(--text-muted);
+      text-decoration: none;
+      transition: color 0.2s;
+    }
+    .footer-nav-col a:hover {
+      color: var(--accent);
+    }
+    .footer-bottom {
+      width: min(1200px, calc(100% - 48px));
+      margin: 36px auto 0;
+      padding-top: 22px;
+      border-top: 1px solid rgba(255, 255, 255, 0.05);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 12px;
+      color: var(--text-muted);
+      font-size: 12.5px;
+    }
+
+    /* Content & Policy Pages Styling */
+    .content-page-wrap {
+      width: min(900px, calc(100% - 48px));
+      margin: 40px auto 60px;
+    }
+    .content-card {
+      background: var(--card-bg);
+      border: 1px solid var(--border-subtle);
+      border-radius: 16px;
+      padding: 44px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+    }
+    @media (max-width: 640px) {
+      .content-card { padding: 24px 18px; }
+      .content-page-wrap { margin: 20px auto 40px; }
+      .nav-container { padding: 12px 18px; flex-wrap: wrap; gap: 12px; }
+      nav { gap: 14px; font-size: 13px; }
+    }
+    .content-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 12px;
+      border-radius: 999px;
+      background: rgba(141, 235, 181, 0.1);
+      border: 1px solid rgba(141, 235, 181, 0.25);
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      margin-bottom: 12px;
+    }
+    .content-title {
+      font-size: 2.1rem;
+      font-weight: 800;
+      color: #FFFFFF;
+      letter-spacing: -0.5px;
+      margin-bottom: 8px;
+    }
+    .content-sub {
+      color: var(--text-muted);
+      font-size: 14.5px;
+      line-height: 1.6;
+      margin-bottom: 28px;
+      padding-bottom: 20px;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+    .policy-section {
+      margin-bottom: 28px;
+    }
+    .policy-section h2 {
+      font-size: 1.22rem;
+      font-weight: 700;
+      color: #FFFFFF;
+      margin-bottom: 10px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .policy-section p, .policy-section li {
+      color: #D1D5DB;
+      font-size: 14px;
+      line-height: 1.7;
+      margin-bottom: 8px;
+    }
+    .policy-section ul {
+      padding-left: 20px;
+      margin-bottom: 14px;
+    }
+    .policy-highlight-box {
+      background: rgba(141, 235, 181, 0.06);
+      border: 1px solid rgba(141, 235, 181, 0.22);
+      border-radius: 12px;
+      padding: 20px 22px;
+      margin: 20px 0;
+    }
+    .policy-highlight-box p {
+      color: #E2E8F0;
+      margin-bottom: 0;
+    }
+    .info-card-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 18px;
+      margin: 24px 0;
+    }
+    .info-box {
+      background: rgba(255, 255, 255, 0.025);
+      border: 1px solid var(--border-subtle);
+      border-radius: 12px;
+      padding: 22px;
+    }
+    .info-box-title {
+      font-size: 12px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--accent);
+      margin-bottom: 8px;
+    }
+    .info-box-value {
+      font-size: 1.15rem;
+      font-weight: 700;
+      color: #FFFFFF;
+    }
+    .info-box-value a {
+      color: #FFFFFF;
+      text-decoration: none;
+    }
+    .info-box-value a:hover {
+      color: var(--accent);
+    }
+    .info-box-desc {
+      font-size: 13px;
+      color: var(--text-muted);
+      margin-top: 6px;
+      line-height: 1.5;
+    }
+    .pricing-table-card {
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid var(--border-subtle);
+      border-radius: 14px;
+      overflow: hidden;
+      margin: 24px 0;
+    }
+    .pricing-table {
+      width: 100%;
+      border-collapse: collapse;
+      text-align: left;
+    }
+    .pricing-table th, .pricing-table td {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+    .pricing-table th {
+      background: rgba(255, 255, 255, 0.04);
+      color: #FFFFFF;
+      font-size: 13px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .pricing-table tr:last-child td {
+      border-bottom: none;
+    }
+    .price-tag-big {
+      font-size: 1.6rem;
+      font-weight: 800;
+      color: var(--accent);
+    }
+    .back-nav-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--text-muted);
+      text-decoration: none;
+      font-size: 13px;
+      margin-bottom: 20px;
+      transition: color 0.2s;
+    }
+    .back-nav-link:hover {
+      color: var(--accent);
+    }
   </style>
 </head>
 <body>
@@ -1559,7 +1810,10 @@ PAGE_TEMPLATE = """<!doctype html>
         <div class="brand-title">Printer of A<span>'</span>s</div>
       </a>
       <nav>
+        <a href="/pricing">Pricing</a>
         <a href="/queue">Print Queue</a>
+        <a href="/about">About</a>
+        <a href="/contact">Contact</a>
       </nav>
     </div>
   </header>
@@ -1569,6 +1823,42 @@ PAGE_TEMPLATE = """<!doctype html>
       {{ body|safe }}
     </div>
   </main>
+
+  <!-- Site-Wide Professional Footer -->
+  <footer class="site-footer">
+    <div class="footer-container">
+      <div class="footer-brand">
+        <div class="footer-brand-title">Printer of A<span>'</span>s</div>
+        <p class="footer-tagline">Autonomous, 24/7 human-less print kiosk. Upload from your phone, pay via UPI, and collect instant laser prints.</p>
+        <div class="footer-contact-mini">
+          <span>📞 <a href="tel:9696123736">9696123736</a> / <a href="tel:9589974245">9589974245</a></span>
+          <span>✉️ <a href="mailto:printerofas@gmail.com">printerofas@gmail.com</a></span>
+          <span>⏱️ Refund Turnaround: <strong>2 Working Days</strong></span>
+        </div>
+      </div>
+      <div class="footer-nav-col">
+        <div class="footer-heading">Services</div>
+        <a href="/">Print Document</a>
+        <a href="/queue">Live Print Queue</a>
+        <a href="/pricing">Pricing & Rates</a>
+      </div>
+      <div class="footer-nav-col">
+        <div class="footer-heading">Company</div>
+        <a href="/about">About Us</a>
+        <a href="/contact">Contact Us</a>
+      </div>
+      <div class="footer-nav-col">
+        <div class="footer-heading">Legal & Policies</div>
+        <a href="/privacy">Privacy Policy</a>
+        <a href="/terms">Terms & Conditions</a>
+        <a href="/refunds">Refund & Cancellation</a>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <div>© 2026 Printer of A's. All rights reserved.</div>
+      <div>Privacy First: Uploaded files are automatically purged once printed.</div>
+    </div>
+  </footer>
 
   <!-- Print Preview Native Modal Dialog -->
   <dialog id="preview-dialog" class="preview-dialog" aria-labelledby="preview-title">
@@ -3101,6 +3391,405 @@ def queue():
       }, 3500);
     </script>
     """, all_rows=all_rows, active_rows=active_rows, queue_map=queue_map, just=just, your_job=your_job, your_pos=your_pos)
+
+
+# ---------- Informational & Compliance Pages ----------
+
+@app.get("/pricing")
+def pricing_page():
+    return render_page("""
+    <div class="content-page-wrap">
+      <a href="/" class="back-nav-link">← Back to Print Kiosk</a>
+      <div class="content-card">
+        <div class="content-badge">Transparent Pricing</div>
+        <h1 class="content-title">Print Rates & Pricing</h1>
+        <p class="content-sub">Simple, flat-rate pricing with zero hidden charges or platform fees. Pay instantly with any UPI app.</p>
+
+        <div class="info-card-grid">
+          <div class="info-box" style="border-color: rgba(141, 235, 181, 0.3); background: rgba(141, 235, 181, 0.04);">
+            <div class="info-box-title">Black & White Print</div>
+            <div class="price-tag-big">₹2.00 <span style="font-size: 14px; font-weight: 500; color: var(--text-muted);">/ page</span></div>
+            <div class="info-box-desc">High-contrast, crystal-clear 1200 DPI monochrome laser print. Perfect for resumes, assignments, exam tickets, notes, and legal documents.</div>
+          </div>
+
+          <div class="info-box" style="border-color: rgba(96, 165, 250, 0.3); background: rgba(96, 165, 250, 0.04);">
+            <div class="info-box-title" style="color: #60A5FA;">Full Colour Print</div>
+            <div class="price-tag-big" style="color: #60A5FA;">₹8.00 <span style="font-size: 14px; font-weight: 500; color: var(--text-muted);">/ page</span></div>
+            <div class="info-box-desc">Vibrant high-density laser printing. Ideal for certificates, project presentations, charts, photo IDs, and brochures.</div>
+          </div>
+        </div>
+
+        <div class="policy-section">
+          <h2>Kiosk Features & Options</h2>
+          <div class="pricing-table-card">
+            <table class="pricing-table">
+              <thead>
+                <tr>
+                  <th>Feature</th>
+                  <th>Details</th>
+                  <th>Cost</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><strong>Black & White (B/W)</strong></td>
+                  <td>Single or double-sided monochrome document print</td>
+                  <td><strong style="color: var(--accent);">₹2.00 / page</strong></td>
+                </tr>
+                <tr>
+                  <td><strong>Full Colour</strong></td>
+                  <td>Rich vibrant color laser document print</td>
+                  <td><strong style="color: #60A5FA;">₹8.00 / page</strong></td>
+                </tr>
+                <tr>
+                  <td><strong>Duplex Printing</strong></td>
+                  <td>Print on both sides of each sheet (saves paper)</td>
+                  <td>Included (per page rate)</td>
+                </tr>
+                <tr>
+                  <td><strong>Multiple Copies</strong></td>
+                  <td>Print from 1 to 20 copies per order</td>
+                  <td>Pages × Copies × Rate</td>
+                </tr>
+                <tr>
+                  <td><strong>Convenience Fee</strong></td>
+                  <td>Payment gateway & platform maintenance charge</td>
+                  <td><strong style="color: #10B981;">₹0.00 (FREE)</strong></td>
+                </tr>
+                <tr>
+                  <td><strong>Paise Offset</strong></td>
+                  <td>Micro-offset (1 to 10 paise max) for collision-free instant UPI detection</td>
+                  <td>Max +₹0.10</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="policy-highlight-box">
+          <p><strong>💡 Live Rate Calculator:</strong> You can see your exact price dynamically calculated when you upload your files on the <a href="/" style="color: var(--accent); font-weight: 700;">Home Page</a> before confirming payment.</p>
+        </div>
+
+        <div style="text-align: center; margin-top: 32px;">
+          <a href="/" class="btn-primary" style="display: inline-flex; align-items: center; gap: 8px; text-decoration: none; padding: 14px 28px; font-size: 15px;">
+            Upload & Print Now →
+          </a>
+        </div>
+      </div>
+    </div>
+    """)
+
+
+@app.get("/about")
+def about_page():
+    return render_page("""
+    <div class="content-page-wrap">
+      <a href="/" class="back-nav-link">← Back to Print Kiosk</a>
+      <div class="content-card">
+        <div class="content-badge">About Us</div>
+        <h1 class="content-title">About Printer of A's</h1>
+        <p class="content-sub">Autonomous, human-less smart print kiosks engineered for fast, secure, and privacy-first document printing.</p>
+
+        <div class="policy-section">
+          <h2>Our Story & Mission</h2>
+          <p>Traditional photocopy and printing shops come with friction: long queues, waiting for an operator, sharing private personal documents over public WhatsApp or infected pendrives, and dealing with cash change.</p>
+          <p><strong>Printer of A's</strong> was built to solve this once and for all. We provide an autonomous, 100% human-less cloud printing experience. Students, educators, professionals, and visitors can walk up to the kiosk, upload their documents directly from their mobile browser, pay seamlessly with any UPI app, and receive freshly printed sheets from the laser printer in seconds.</p>
+        </div>
+
+        <div class="info-card-grid">
+          <div class="info-box">
+            <div class="info-box-title">⚡ 100% Autonomous</div>
+            <div class="info-box-desc">Works directly in your mobile browser. Scan the kiosk QR, upload PDFs or photos, and print without installing apps.</div>
+          </div>
+          <div class="info-box">
+            <div class="info-box-title">🔒 Zero Document Retention</div>
+            <div class="info-box-desc">No human operator ever reads or sees your files. All files are automatically purged from local disk and cloud storage as soon as printing completes.</div>
+          </div>
+          <div class="info-box">
+            <div class="info-box-title">💳 Seamless UPI</div>
+            <div class="info-box-desc">Zero platform fees. Instant verification through dynamic Cashfree UPI QR codes with all major UPI apps.</div>
+          </div>
+        </div>
+
+        <div class="policy-section">
+          <h2>How It Works</h2>
+          <ul>
+            <li><strong>Step 1: Upload Documents:</strong> Select PDFs or camera photos on your phone. Our smart client-side optimizer scales images to 300 DPI laser standards in milliseconds while leaving PDFs in pure vector resolution.</li>
+            <li><strong>Step 2: Instant Payment:</strong> Scan the dynamic UPI QR code with GPay, PhonePe, Paytm, or BHIM.</li>
+            <li><strong>Step 3: Autonomous Laser Printing:</strong> The kiosk worker picks up your job from the queue, prints your documents, and purges your files permanently for user privacy.</li>
+          </ul>
+        </div>
+
+        <div class="policy-section">
+          <h2>Contact & Operator Information</h2>
+          <p>Printer of A's is operated with dedicated customer care:</p>
+          <div class="info-card-grid" style="margin-top: 14px;">
+            <div class="info-box">
+              <div class="info-box-title">Support Phones</div>
+              <div class="info-box-value"><a href="tel:9696123736">+91 9696123736</a></div>
+              <div class="info-box-value" style="margin-top: 4px;"><a href="tel:9589974245">+91 9589974245</a></div>
+            </div>
+            <div class="info-box">
+              <div class="info-box-title">Official Email</div>
+              <div class="info-box-value"><a href="mailto:printerofas@gmail.com">printerofas@gmail.com</a></div>
+              <div class="info-box-desc">Response time: within 24 hours</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    """)
+
+
+@app.get("/contact")
+def contact_page():
+    return render_page("""
+    <div class="content-page-wrap">
+      <a href="/" class="back-nav-link">← Back to Print Kiosk</a>
+      <div class="content-card">
+        <div class="content-badge">Support & Assistance</div>
+        <h1 class="content-title">Contact Us</h1>
+        <p class="content-sub">Have questions, feedback, or need help with a print transaction? Our support team is available 7 days a week.</p>
+
+        <div class="info-card-grid">
+          <div class="info-box" style="border-color: rgba(141, 235, 181, 0.3);">
+            <div class="info-box-title">Primary Helpline</div>
+            <div class="info-box-value"><a href="tel:9696123736">+91 9696123736</a></div>
+            <div class="info-box-desc">Call or WhatsApp for immediate kiosk assistance & print inquiries.</div>
+          </div>
+
+          <div class="info-box" style="border-color: rgba(141, 235, 181, 0.3);">
+            <div class="info-box-title">Secondary Helpline</div>
+            <div class="info-box-value"><a href="tel:9589974245">+91 9589974245</a></div>
+            <div class="info-box-desc">Alternate support line for technical inquiries and refund queries.</div>
+          </div>
+
+          <div class="info-box" style="border-color: rgba(96, 165, 250, 0.3);">
+            <div class="info-box-title" style="color: #60A5FA;">Email Support</div>
+            <div class="info-box-value"><a href="mailto:printerofas@gmail.com">printerofas@gmail.com</a></div>
+            <div class="info-box-desc">All email queries responded to within 24 business hours.</div>
+          </div>
+
+          <div class="info-box">
+            <div class="info-box-title">Refund Turnaround</div>
+            <div class="info-box-value" style="color: #10B981;">2 Working Days</div>
+            <div class="info-box-desc">Failed prints or debited amounts are credited back within 2 working days.</div>
+          </div>
+        </div>
+
+        <div class="policy-section" style="margin-top: 32px;">
+          <h2>How to Get Fast Support</h2>
+          <p>When contacting us regarding a print job or payment, please provide the following details so we can resolve your issue in minutes:</p>
+          <ul>
+            <li><strong>Job ID:</strong> The 10-character code shown on your screen (e.g. <code>cfb0ee5c81</code>).</li>
+            <li><strong>Payment Reference / UTR Number:</strong> The 12-digit transaction ID from your UPI app (Google Pay, PhonePe, Paytm, etc.).</li>
+            <li><strong>Kiosk Location:</strong> The campus or premises location of the kiosk where you printed.</li>
+          </ul>
+        </div>
+
+        <div class="policy-highlight-box">
+          <p><strong>Operating Hours:</strong> Monday to Sunday, 8:00 AM – 10:00 PM IST.<br>For urgent kiosk issues outside these hours, drop an email to <a href="mailto:printerofas@gmail.com" style="color: var(--accent);">printerofas@gmail.com</a> and we will assist promptly.</p>
+        </div>
+      </div>
+    </div>
+    """)
+
+
+@app.get("/privacy")
+def privacy_page():
+    return render_page("""
+    <div class="content-page-wrap">
+      <a href="/" class="back-nav-link">← Back to Print Kiosk</a>
+      <div class="content-card">
+        <div class="content-badge">Data Privacy</div>
+        <h1 class="content-title">Privacy Policy</h1>
+        <p class="content-sub">Effective Date: November 2026. Zero Document Retention & End-to-End Privacy Commitment.</p>
+
+        <div class="policy-highlight-box" style="border-color: rgba(141, 235, 181, 0.4); background: rgba(141, 235, 181, 0.08);">
+          <h2 style="font-size: 1.15rem; color: #8DEBB5; margin-bottom: 6px;">🔒 Zero Document Retention Guarantee</h2>
+          <p>We respect your privacy above all else. <strong>Printer of A's does NOT store, inspect, archive, or retain your uploaded files.</strong> The moment your document finishes printing at the kiosk (status: done), all uploaded images and merged PDF files are <strong>permanently deleted</strong> from both local disk and Supabase Cloud Storage.</p>
+        </div>
+
+        <div class="policy-section">
+          <h2>1. Information We Collect</h2>
+          <p>When you use the Printer of A's kiosk, we only collect the minimum technical data necessary to complete your print request:</p>
+          <ul>
+            <li><strong>Document Data (Temporary):</strong> File name, page count, color selection, copies, and duplex settings required to compute the rate and queue the job.</li>
+            <li><strong>Payment Data:</strong> Job ID, amount paid, and 12-digit bank reference (UTR) provided by Cashfree Payment Gateway to verify completion of payment. We <strong>never</strong> collect, view, or store bank account numbers, credit/debit card numbers, CVVs, or UPI PINs.</li>
+            <li><strong>Contact Details (Voluntary):</strong> If you reach out to our support team, we collect your phone number or email solely to assist with your query or refund.</li>
+          </ul>
+        </div>
+
+        <div class="policy-section">
+          <h2>2. How We Use Your Information</h2>
+          <ul>
+            <li>To process and print your documents according to your selected preferences.</li>
+            <li>To verify payment status with Cashfree Payment Gateway and manage your position in the print queue.</li>
+            <li>To process eligible refunds within 2 working days in case of printer hardware issues.</li>
+            <li>We <strong>never sell, lease, trade, or share</strong> user data with any third-party advertisers or marketing agencies.</li>
+          </ul>
+        </div>
+
+        <div class="policy-section">
+          <h2>3. Data Retention & Permanent Deletion</h2>
+          <p>Uploaded documents are stored ephemerally in encrypted Supabase Cloud Storage only while waiting in the print queue. As soon as the kiosk printer daemon signals <code>status: done</code>:</p>
+          <ul>
+            <li>The local temporary file on the kiosk server is deleted via <code>os.remove()</code>.</li>
+            <li>The document object in the Supabase Cloud Storage bucket is permanently purged via the Supabase Storage deletion API.</li>
+            <li>Only basic audit logs (Job ID, amount, and timestamp) are retained for accounting and compliance purposes.</li>
+          </ul>
+        </div>
+
+        <div class="policy-section">
+          <h2>4. Data Security</h2>
+          <p>All data transmitted between your device and Printer of A's is encrypted in transit using industry-standard <strong>HTTPS/TLS 1.3</strong> protocols. Payment transactions are processed directly through RBI-compliant payment gateway partners (Cashfree Payments India).</p>
+        </div>
+
+        <div class="policy-section">
+          <h2>5. Contact & Grievance Redressal</h2>
+          <p>For any privacy-related inquiries, concerns, or requests, please contact our Data & Grievance team:</p>
+          <p>
+            <strong>Printer of A's Support Team</strong><br>
+            Phone: <a href="tel:9696123736" style="color: var(--accent);">+91 9696123736</a> / <a href="tel:9589974245" style="color: var(--accent);">+91 9589974245</a><br>
+            Email: <a href="mailto:printerofas@gmail.com" style="color: var(--accent);">printerofas@gmail.com</a>
+          </p>
+        </div>
+      </div>
+    </div>
+    """)
+
+
+@app.get("/terms")
+def terms_page():
+    return render_page("""
+    <div class="content-page-wrap">
+      <a href="/" class="back-nav-link">← Back to Print Kiosk</a>
+      <div class="content-card">
+        <div class="content-badge">Legal Terms</div>
+        <h1 class="content-title">Terms & Conditions</h1>
+        <p class="content-sub">Last updated: November 2026. Please read these terms carefully before using Printer of A's services.</p>
+
+        <div class="policy-section">
+          <h2>1. Agreement to Terms</h2>
+          <p>By accessing or using the Printer of A's website, upload portal, and autonomous print kiosks, you agree to be bound by these Terms and Conditions. If you do not agree to these terms, please do not use the service.</p>
+        </div>
+
+        <div class="policy-section">
+          <h2>2. Description of Service</h2>
+          <p>Printer of A's operates self-service, autonomous print kiosks allowing customers to upload digital files (PDF, PNG, JPG, JPEG, WEBP), pay via UPI, and collect physical laser prints directly from the kiosk printer tray.</p>
+        </div>
+
+        <div class="policy-section">
+          <h2>3. User Responsibilities & Acceptable Content</h2>
+          <p>You represent and warrant that:</p>
+          <ul>
+            <li>You own or have necessary licenses, rights, and permissions to print the uploaded documents.</li>
+            <li>You will NOT upload, transmit, or print any material that is unlawful, defamatory, obscene, pornographic, promoting hate speech, or infringing on intellectual property or copyright laws.</li>
+            <li>You are solely responsible for verifying print preview, page count, and color selections prior to payment.</li>
+          </ul>
+        </div>
+
+        <div class="policy-section">
+          <h2>4. Pricing, Payments & Micro-Offsets</h2>
+          <ul>
+            <li>All rates (e.g. ₹2.00/page for B/W, ₹8.00/page for Colour) are clearly displayed before confirmation.</li>
+            <li>A micro-offset of 1 to 10 paise (₹0.01 to ₹0.10 max) is applied per transaction to enable unique payment matching across concurrent customers.</li>
+            <li>Payments are processed securely via Cashfree Payment Gateway. Orders are queued only after successful receipt of payment.</li>
+          </ul>
+        </div>
+
+        <div class="policy-section">
+          <h2>5. Document Collection & Output Tray</h2>
+          <p>Customers are responsible for collecting their printed documents from the kiosk output tray immediately upon completion. Printer of A's is not liable for documents left unattended in the output tray after printing has finished.</p>
+        </div>
+
+        <div class="policy-section">
+          <h2>6. Limitation of Liability</h2>
+          <p>Printer of A's shall not be liable for any indirect, incidental, or consequential damages arising from machine downtime, network disruptions, or power outages. In the event of an automated hardware failure where printing cannot complete, our liability is strictly limited to a full refund of the amount paid in accordance with our Refund Policy.</p>
+        </div>
+
+        <div class="policy-section">
+          <h2>7. Contact Information</h2>
+          <p>Questions regarding these Terms should be directed to:<br>
+          Email: <a href="mailto:printerofas@gmail.com" style="color: var(--accent);">printerofas@gmail.com</a><br>
+          Helpline: <a href="tel:9696123736" style="color: var(--accent);">+91 9696123736</a> / <a href="tel:9589974245" style="color: var(--accent);">+91 9589974245</a></p>
+        </div>
+      </div>
+    </div>
+    """)
+
+
+@app.get("/refunds")
+@app.get("/cancellation-refund")
+def refunds_page():
+    return render_page("""
+    <div class="content-page-wrap">
+      <a href="/" class="back-nav-link">← Back to Print Kiosk</a>
+      <div class="content-card">
+        <div class="content-badge">Customer Protection</div>
+        <h1 class="content-title">Refund & Cancellation Policy</h1>
+        <p class="content-sub">Fair, transparent, and prompt refunds. Guaranteed turnaround within 2 working days.</p>
+
+        <div class="policy-highlight-box" style="border-color: rgba(16, 185, 129, 0.4); background: rgba(16, 185, 129, 0.08);">
+          <h2 style="font-size: 1.15rem; color: #10B981; margin-bottom: 6px;">⏱️ Guaranteed 2 Working Days Refund Turnaround</h2>
+          <p>If your print job fails due to any technical reason or your account was debited without the job printing, <strong>we will issue a 100% refund directly back to your original payment method (UPI / Bank Account) within 2 working days</strong>.</p>
+        </div>
+
+        <div class="policy-section">
+          <h2>1. Cancellation Policy</h2>
+          <ul>
+            <li><strong>Before Payment:</strong> You can cancel, modify, or delete your uploaded files at any time on the kiosk upload page with zero charge.</li>
+            <li><strong>After Payment:</strong> Because Printer of A's is an automated kiosk system, once your payment is confirmed, the document is immediately submitted to the physical printer queue and printing begins automatically. Once physical printing has commenced, the order cannot be cancelled.</li>
+          </ul>
+        </div>
+
+        <div class="policy-section">
+          <h2>2. Refund Eligibility Criteria</h2>
+          <p>You are entitled to a full refund under any of the following circumstances:</p>
+          <ul>
+            <li><strong>Transaction Debited but Job Not Queued:</strong> Amount was deducted from your UPI account, but the kiosk did not register the payment or queue your document.</li>
+            <li><strong>Printer Hardware Malfunction:</strong> The printer ran out of paper, paper jammed, experienced a hardware failure, or suffered an unexpected power cut during your job.</li>
+            <li><strong>Severe Print Quality Defects:</strong> Ink streaks, illegible output, or blank pages directly resulting from a printer malfunction.</li>
+            <li><strong>Duplicate Debits:</strong> Multiple charges for a single print job.</li>
+          </ul>
+        </div>
+
+        <div class="policy-section">
+          <h2>3. Refund Processing Timeline</h2>
+          <ul>
+            <li><strong>Review & Verification:</strong> All refund requests are reviewed and verified within 12 to 24 hours against our transaction logs.</li>
+            <li><strong>Payout Timeline:</strong> Approved refunds are credited directly back to the source bank account or UPI VPA within <strong>2 working days</strong>.</li>
+            <li><strong>Zero Deductions:</strong> No processing fees or deduction charges will be levied on eligible refunds.</li>
+          </ul>
+        </div>
+
+        <div class="policy-section">
+          <h2>4. How to Claim Your Refund</h2>
+          <p>To request a refund, please reach out to us with your transaction details:</p>
+          <div class="info-card-grid" style="margin-top: 16px;">
+            <div class="info-box">
+              <div class="info-box-title">Via WhatsApp / Phone</div>
+              <div class="info-box-value"><a href="tel:9696123736">+91 9696123736</a></div>
+              <div class="info-box-value" style="margin-top: 4px;"><a href="tel:9589974245">+91 9589974245</a></div>
+              <div class="info-box-desc">Fastest response via WhatsApp message with payment screenshot.</div>
+            </div>
+
+            <div class="info-box">
+              <div class="info-box-title">Via Email</div>
+              <div class="info-box-value"><a href="mailto:printerofas@gmail.com">printerofas@gmail.com</a></div>
+              <div class="info-box-desc">Subject: <em>Refund Request - [Job ID]</em></div>
+            </div>
+          </div>
+          <p style="margin-top: 14px;"><strong>Please include:</strong></p>
+          <ul>
+            <li>Your 10-character <strong>Job ID</strong> (if available).</li>
+            <li>Your 12-digit <strong>UPI Reference / UTR Number</strong> from your payment receipt.</li>
+            <li>Screenshot of your payment or brief description of the issue.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+    """)
 
 
 # ---------- API for Raspberry Pi Worker Daemon ----------
